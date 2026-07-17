@@ -10,13 +10,13 @@ O Clicars Search usa um **scraper próprio do Google Maps** (Chromium headless v
 
 ```mermaid
 graph LR
-    Browser["Navegador\n(Next.js 14)"] -->|/api/v1/searches| API["Backend\n(Go 1.25)"]
-    Browser -->|/api/v1/whatsapp/*| API
-    API -->|Chromium headless rod| GMaps["Google Maps\n(scraping direto)"]
-    API -->|whatsmeow multi-device| WA["WhatsApp\n(até 15 números)"]
-    API -->|INSERT / SELECT / DELETE| DB[(PostgreSQL 16)]
-    GMaps -->|resultados enriquecidos| API
-    DB -->|dados persistidos\n(retenção 45 dias)| API
+    Browser["Navegador - Next.js 14"] -->|"/api/v1/searches"| API["Backend - Go 1.25"]
+    Browser -->|"/api/v1/whatsapp/*"| API
+    API -->|"Chromium headless rod"| GMaps["Google Maps - scraping direto"]
+    API -->|"whatsmeow multi-device"| WA["WhatsApp - ate 15 numeros"]
+    API -->|"INSERT / SELECT / DELETE"| DB[("PostgreSQL 16")]
+    GMaps -->|"resultados enriquecidos"| API
+    DB -->|"dados persistidos - retencao 45 dias"| API
 ```
 
 ```

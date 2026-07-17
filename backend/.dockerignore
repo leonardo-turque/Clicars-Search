@@ -1,0 +1,4 @@
+# Local Go build/module caches created when building via mounted containers.
+.gocache/
+.gomodcache/
+*.log

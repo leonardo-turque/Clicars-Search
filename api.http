@@ -1,0 +1,68 @@
+### Clicars Search — manual end-to-end API checks
+###
+### For the VS Code "REST Client" extension or the IntelliJ HTTP Client.
+### Prereqs: the stack is up (`docker compose up -d`) and FIRECRAWL_API_KEY is
+### set in .env. Click "Send Request" above each request to run it.
+
+@host = http://localhost:8080
+
+### 1. Health check — expect 200 {"status":"ok"}
+GET {{host}}/health
+
+### 2. Happy path — expect 201 Created
+# Validations: status is 201, body.search_id is a UUID, body.companies is not null.
+POST {{host}}/api/v1/searches
+Content-Type: application/json
+
+{
+  "niche": "concessionárias de veículos seminovos",
+  "location": "São Paulo, Brasil",
+  "quantity": 3
+}
+
+### 3. Validation error — empty niche -> expect 400 Bad Request
+POST {{host}}/api/v1/searches
+Content-Type: application/json
+
+{
+  "niche": "",
+  "location": "São Paulo, Brasil",
+  "quantity": 3
+}
+
+### 4. Validation error — quantity over the max (50) -> expect 400 Bad Request
+POST {{host}}/api/v1/searches
+Content-Type: application/json
+
+{
+  "niche": "padarias",
+  "location": "São Paulo",
+  "quantity": 999
+}
+
+### 5. Malformed JSON -> expect 400 Bad Request
+POST {{host}}/api/v1/searches
+Content-Type: application/json
+
+{ "niche": "padarias", "location": }
+
+### 6. Wrong method -> expect 405 Method Not Allowed
+GET {{host}}/api/v1/searches
+
+
+### ---------------------------------------------------------------------------
+### WhatsApp Multi-Device (whatsmeow)
+### ---------------------------------------------------------------------------
+
+### 7. List WhatsApp sessions -> expect 200, array (possibly empty)
+GET {{host}}/api/v1/whatsapp/sessions
+
+### 8. Start a connection -> expect 200 { session_id, qr_code: "data:image/png;base64,..." }
+# Render qr_code in an <img>, scan it from the WhatsApp app (Linked devices).
+# Pairing completes asynchronously: poll request #7 until the number is CONNECTED.
+# 409 if 15 numbers are already connected.
+GET {{host}}/api/v1/whatsapp/connect
+
+### 9. Disconnect / remove a number -> expect 204 (404 if id unknown)
+# Replace <id> with an id returned by request #7.
+DELETE {{host}}/api/v1/whatsapp/sessions/<id>

@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-clicars}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clicars_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-clicars_search}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clicars} -d ${POSTGRES_DB:-clicars_search}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:8080"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER:-clicars}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-clicars_pass}
+      DB_NAME: ${POSTGRES_DB:-clicars_search}
+      GOOGLEMAPS_BROWSER_POOL: ${GOOGLEMAPS_BROWSER_POOL:-2}
+      GOOGLEMAPS_CONCURRENCY: ${GOOGLEMAPS_CONCURRENCY:-4}
+      GOOGLEMAPS_SCROLL_TIMEOUT: ${GOOGLEMAPS_SCROLL_TIMEOUT:-30s}
+      CAMPAIGN_MIN_DELAY: ${CAMPAIGN_MIN_DELAY:-30s}
+      CAMPAIGN_MAX_DELAY: ${CAMPAIGN_MAX_DELAY:-90s}
+      CAMPAIGN_RATE_PER_HOUR: ${CAMPAIGN_RATE_PER_HOUR:-30}
+      CAMPAIGN_MAX_WORKERS: ${CAMPAIGN_MAX_WORKERS:-5}
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # 2 browsers × ~400 MB + Go runtime + margem de segurança
+          memory: 1536m
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+volumes:
+  postgres_data:

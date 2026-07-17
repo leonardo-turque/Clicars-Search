@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+
+# Go binaries
+backend/bin/
+*.exe
+
+# Environment variables — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# Docker volume data (if using local bind mounts instead of named volumes)
+postgres_data/
+
+# OS / editor artefacts
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

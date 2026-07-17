@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+*.md
+.dockerignore
+
+# Test tooling — not needed in the production image / build.
+*.test.ts
+*.test.tsx
+jest.config.mjs
+jest.setup.ts

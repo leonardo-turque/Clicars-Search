@@ -41,6 +41,8 @@ services:
       CAMPAIGN_MAX_DELAY: ${CAMPAIGN_MAX_DELAY:-90s}
       CAMPAIGN_RATE_PER_HOUR: ${CAMPAIGN_RATE_PER_HOUR:-30}
       CAMPAIGN_MAX_WORKERS: ${CAMPAIGN_MAX_WORKERS:-5}
+      WHATSAPP_API_URL: ${WHATSAPP_API_URL:-https://whatsapp.zennitex.com.br/api}
+      WHATSAPP_ADMIN_KEY: ${WHATSAPP_ADMIN_KEY:-}
     depends_on:
       db:
         condition: service_healthy

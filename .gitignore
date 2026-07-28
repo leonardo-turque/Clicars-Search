@@ -13,6 +13,7 @@ backend/bin/
 .env
 .env.local
 .env.*.local
+.firecrawl/
 
 # Local research / scrape caches
 .firecrawl/

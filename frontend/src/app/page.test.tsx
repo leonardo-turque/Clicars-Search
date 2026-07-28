@@ -23,7 +23,7 @@ describe('Dashboard (search form)', () => {
 
   it('shows the loading state after the search is submitted', async () => {
     // jsdom has no fetch, so install a stub that never resolves: the component
-    // stays in its "loading" state, which is exactly what we want to assert.
+    // stays in its "submitting" state, which is exactly what we want to assert.
     const fetchMock = jest.fn(() => new Promise<never>(() => {}))
     global.fetch = fetchMock as unknown as typeof fetch
 
@@ -34,24 +34,27 @@ describe('Dashboard (search form)', () => {
     await user.type(screen.getByLabelText(/cidade/i), 'São Paulo')
     await user.click(screen.getByRole('button', { name: /buscar empresas/i }))
 
-    // While loading, the button label switches to "Buscando..." and is disabled.
-    const loadingButton = await screen.findByRole('button', { name: /buscando/i })
+    // While the POST is in flight, the button label switches to "Iniciando…" and is disabled.
+    const loadingButton = await screen.findByRole('button', { name: /iniciando/i })
     expect(loadingButton).toBeDisabled()
     // 2 calls: one for the history load on mount, one for the search submit.
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('opens the campaign dispatch panel for a search and lists connected numbers', async () => {
-    const search = {
-      search_id: 'srch-1',
+    const searchId = 'srch-1'
+    const detail = {
+      search_id: searchId,
+      status: 'COMPLETED',
       niche: 'Padarias',
       location: 'São Paulo',
       quantity: 10,
+      progress: 10,
       created_at: '2026-06-15T12:00:00Z',
       companies: [
         {
           id: 'c1',
-          search_id: 'srch-1',
+          search_id: searchId,
           name: 'Pão Quente',
           location: 'São Paulo',
           phone: '11999990000',
@@ -62,14 +65,17 @@ describe('Dashboard (search form)', () => {
     }
     const sessions = [{ id: 'sess-1', phone_number: '5511988887777', status: 'CONNECTED' }]
 
-    // Route by URL + method: history (GET), search submit (POST), WhatsApp sessions (GET).
+    // Async search flow: POST returns search_id, then GET /searches/:id is polled for results.
     const fetchMock = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
       const method = (init?.method ?? 'GET').toUpperCase()
       const reply = (body: unknown) =>
         Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response)
 
-      if (url.endsWith('/api/v1/searches') && method === 'POST') return reply(search)
+      if (url.endsWith('/api/v1/searches') && method === 'POST') {
+        return reply({ search_id: searchId })
+      }
+      if (url.endsWith(`/api/v1/searches/${searchId}`)) return reply(detail)
       if (url.endsWith('/api/v1/searches')) return reply([])
       if (url.endsWith('/api/v1/whatsapp/sessions')) return reply(sessions)
       return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`))
@@ -83,7 +89,7 @@ describe('Dashboard (search form)', () => {
     await user.type(screen.getByLabelText(/cidade/i), 'São Paulo')
     await user.click(screen.getByRole('button', { name: /buscar empresas/i }))
 
-    // Results render; the "Iniciar Campanha" CTA opens the dispatch panel.
+    // Results render after polling; the "Iniciar Campanha" CTA opens the dispatch panel.
     const startBtn = await screen.findByRole('button', { name: /iniciar campanha/i })
     await user.click(startBtn)
 

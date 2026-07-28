@@ -1,12 +1,7 @@
-// Package whatsapp implements the multi-device WhatsApp session manager built on
-// top of whatsmeow (go.mau.fi/whatsmeow). It keeps an in-memory registry of live
-// clients (capped at MaxSessions) and mirrors their app-level state — which
-// number, current status — into the whatsapp_sessions table via a Store.
-//
-// whatsmeow owns the cryptographic device/session material in its own sqlstore
-// tables; this manager only orchestrates pairing (QR), reconnection on startup,
-// and teardown. The two views are linked by the device JID, persisted in the
-// session row's session_data.
+// Package whatsapp integrates Clicars Search with the hosted Zennitex WhatsApp
+// API (https://whatsapp.zennitex.com.br). Pairing, connection state and message
+// delivery all go through that service — this package is a thin adapter that
+// keeps the Clicars HTTP surface (/api/v1/whatsapp/*, campaign Sender) stable.
 package whatsapp
 
 import (
@@ -14,445 +9,257 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	qrcode "github.com/skip2/go-qrcode"
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/store/sqlstore"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/zennitex/clicars-search/internal/domain"
 )
 
 const (
-	// MaxSessions caps how many WhatsApp numbers can be paired simultaneously.
+	// MaxSessions caps how many WhatsApp numbers Clicars may pair at once.
 	MaxSessions = 15
-
-	// qrWaitTimeout bounds how long Connect blocks waiting for whatsmeow to emit
-	// the first QR code before giving up.
-	qrWaitTimeout = 15 * time.Second
-
-	// qrEventSuccess is the QRChannelItem.Event value emitted once pairing
-	// completes (whatsmeow.QRChannelSuccess).
-	qrEventSuccess = "success"
 )
 
 var (
-	// ErrLimitReached is returned by Connect when MaxSessions are already in use.
-	ErrLimitReached = errors.New("whatsapp session limit reached")
-	// ErrQRUnavailable is returned when whatsmeow fails to produce a QR code.
-	ErrQRUnavailable = errors.New("could not generate whatsapp qr code")
-	// ErrSessionNotConnected is returned by the messaging methods when the target
-	// session has no live, logged-in client (so it can't validate or send).
+	ErrLimitReached        = errors.New("whatsapp session limit reached")
+	ErrQRUnavailable       = errors.New("could not generate whatsapp qr code")
 	ErrSessionNotConnected = errors.New("whatsapp session not connected")
+	ErrNotFound            = errors.New("whatsapp instance not found")
+	ErrAlreadyConnected    = errors.New("whatsapp instance already connected")
+	ErrNotConfigured       = errors.New("whatsapp api not configured")
 )
 
-// Store is the persistence port the manager depends on, implemented by
-// repository.WhatsAppRepository.
-type Store interface {
-	Insert(ctx context.Context, id, jid, phone, status string) (*domain.WhatsAppSession, error)
-	Update(ctx context.Context, id, jid, phone, status string) error
-	UpdateStatus(ctx context.Context, id, status string) error
-	List(ctx context.Context) ([]domain.WhatsAppSession, error)
-	GetByID(ctx context.Context, id string) (*domain.WhatsAppSession, error)
-	Delete(ctx context.Context, id string) error
-	DeleteOldDisconnected(ctx context.Context, days int) (int64, error)
+// Logger is the minimal logging port; *log.Logger satisfies it.
+type Logger interface {
+	Printf(format string, v ...any)
 }
 
-// managedSession pairs a session id with its live whatsmeow client. client is
-// nil only for the brief window between reserving a slot and finishing Connect.
-type managedSession struct {
-	id     string
-	client *whatsmeow.Client
-}
+type nopLogger struct{}
 
-// Manager owns the registry of live whatsmeow clients and the persistence Store.
+func (nopLogger) Printf(string, ...any) {}
+
+// Manager proxies session lifecycle and messaging to the Zennitex WhatsApp API.
 type Manager struct {
-	mu        sync.Mutex
-	sessions  map[string]*managedSession
-	container *sqlstore.Container
-	store     Store
-	log       waLog.Logger
+	api    *APIClient
+	log    Logger
+	prefix string // instance name prefix when creating slots
+
+	mu     sync.RWMutex
+	tokens map[string]string // instanceID → bearer token (from create/list)
 }
 
-// NewManager wires the manager. container is the whatsmeow sqlstore backing the
-// device material; store persists the app-level session rows.
-func NewManager(container *sqlstore.Container, store Store, log waLog.Logger) *Manager {
-	if log == nil {
-		log = waLog.Noop
+// NewManager builds a remote WhatsApp manager. baseURL must point at the API
+// root including /api (e.g. https://whatsapp.zennitex.com.br/api).
+func NewManager(baseURL, adminKey string, logger Logger) (*Manager, error) {
+	baseURL = strings.TrimSpace(baseURL)
+	adminKey = strings.TrimSpace(adminKey)
+	if baseURL == "" || adminKey == "" {
+		return nil, ErrNotConfigured
+	}
+	if logger == nil {
+		logger = nopLogger{}
 	}
 	return &Manager{
-		sessions:  make(map[string]*managedSession),
-		container: container,
-		store:     store,
-		log:       log,
-	}
+		api:    NewAPIClient(baseURL, adminKey),
+		log:    logger,
+		prefix: "Clicars Search",
+		tokens: make(map[string]string),
+	}, nil
 }
 
-// Connect starts a new pairing: it spins up a fresh whatsmeow client, asks for a
-// QR code, and returns the first code rendered as a base64 PNG data URL together
-// with the new session id. Pairing then continues in the background — the caller
-// (frontend) polls List until the number appears as CONNECTED. The slot is held
-// for the whole pairing attempt and released automatically if it expires.
+// Connect creates a remote instance and returns its id plus a PNG QR data URL
+// ready for <img src>. Pairing continues on the remote API; the UI polls List.
 func (m *Manager) Connect(ctx context.Context) (string, string, error) {
-	sessionID := uuid.NewString()
-
-	// Reserve the slot atomically so concurrent Connect calls cannot oversubscribe.
-	m.mu.Lock()
-	if len(m.sessions) >= MaxSessions {
-		m.mu.Unlock()
+	instances, err := m.api.ListInstances(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: %v", ErrQRUnavailable, err)
+	}
+	if len(instances) >= MaxSessions {
 		return "", "", ErrLimitReached
 	}
-	m.sessions[sessionID] = &managedSession{id: sessionID}
-	m.mu.Unlock()
 
-	deviceStore := m.container.NewDevice()
-	client := whatsmeow.NewClient(deviceStore, m.log.Sub("client-"+shortID(sessionID)))
-
-	// The pairing flow must outlive this HTTP request — the user still has to scan
-	// the code after we return — so it runs under its own background context.
-	qrCtx, cancelQR := context.WithCancel(context.Background())
-	qrChan, err := client.GetQRChannel(qrCtx) // must be called before Connect
+	name := fmt.Sprintf("%s #%d", m.prefix, len(instances)+1)
+	inst, err := m.api.CreateInstance(ctx, name)
 	if err != nil {
-		cancelQR()
-		m.removeSession(sessionID)
 		return "", "", fmt.Errorf("%w: %v", ErrQRUnavailable, err)
 	}
-	if err := client.Connect(); err != nil {
-		cancelQR()
-		m.removeSession(sessionID)
+	m.cacheToken(inst.ID, inst.Token)
+
+	qr, err := m.api.GetQR(ctx, inst.ID)
+	if err != nil {
+		// Best-effort cleanup so a failed QR does not burn a slot.
+		_ = m.api.DeleteInstance(context.Background(), inst.ID)
+		m.forgetToken(inst.ID)
+		if errors.Is(err, ErrAlreadyConnected) {
+			return "", "", err
+		}
 		return "", "", fmt.Errorf("%w: %v", ErrQRUnavailable, err)
 	}
-
-	m.mu.Lock()
-	if ms, ok := m.sessions[sessionID]; ok {
-		ms.client = client
-	}
-	m.mu.Unlock()
-
-	firstCode := make(chan string, 1)
-	go m.pump(sessionID, client, qrChan, cancelQR, firstCode)
-
-	select {
-	case code, ok := <-firstCode:
-		if !ok {
-			return "", "", ErrQRUnavailable // pairing ended before any code
-		}
-		png, err := qrcode.Encode(code, qrcode.Medium, 256)
-		if err != nil {
-			cancelQR()
-			m.disconnectAndRemove(sessionID, client)
-			return "", "", fmt.Errorf("%w: %v", ErrQRUnavailable, err)
-		}
-		dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
-		return sessionID, dataURL, nil
-	case <-time.After(qrWaitTimeout):
-		cancelQR()
-		m.disconnectAndRemove(sessionID, client)
+	if strings.TrimSpace(qr.QRCode) == "" {
+		_ = m.api.DeleteInstance(context.Background(), inst.ID)
+		m.forgetToken(inst.ID)
 		return "", "", ErrQRUnavailable
-	case <-ctx.Done():
-		cancelQR()
-		m.disconnectAndRemove(sessionID, client)
-		return "", "", ctx.Err()
-	}
-}
-
-// pump drains the QR channel: it forwards the first code to Connect, then waits
-// for the terminal event (success / timeout / error) to either persist the new
-// session or release the reserved slot.
-func (m *Manager) pump(sessionID string, client *whatsmeow.Client, qrChan <-chan whatsmeow.QRChannelItem, cancelQR context.CancelFunc, firstCode chan<- string) {
-	defer cancelQR()
-	sentFirst := false
-
-	for item := range qrChan {
-		switch item.Event {
-		case whatsmeow.QRChannelEventCode:
-			if !sentFirst {
-				sentFirst = true
-				firstCode <- item.Code
-			}
-		case qrEventSuccess:
-			m.onPairSuccess(sessionID, client)
-			return
-		default:
-			// timeout, error, err-client-outdated, ... : pairing failed or expired.
-			m.log.Warnf("pairing for session %s ended: %s (%v)", sessionID, item.Event, item.Error)
-			if !sentFirst {
-				close(firstCode)
-			}
-			m.disconnectAndRemove(sessionID, client)
-			return
-		}
 	}
 
-	if !sentFirst {
-		close(firstCode)
-	}
-	m.disconnectAndRemove(sessionID, client)
-}
-
-// onPairSuccess persists the freshly paired number and attaches the long-lived
-// status handler. The session id chosen at Connect time becomes the row id, so
-// the in-memory registry and the database share one identifier.
-func (m *Manager) onPairSuccess(sessionID string, client *whatsmeow.Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	jid := client.Store.GetJID()
-	if _, err := m.store.Insert(ctx, sessionID, jid.String(), jid.User, domain.WhatsAppConnected); err != nil {
-		m.log.Errorf("persist whatsapp session %s failed: %v", sessionID, err)
-		// Keep the live client regardless; status reconciles on next restart.
-	}
-	m.attachStatusHandler(sessionID, client)
-	m.log.Infof("whatsapp session %s connected as +%s", sessionID, jid.User)
-}
-
-// attachStatusHandler reacts to a remote logout (the number was unlinked from
-// the phone) by tearing the session down. Transient connect/disconnect blips are
-// intentionally ignored here — List reports live status from the client itself.
-func (m *Manager) attachStatusHandler(sessionID string, client *whatsmeow.Client) {
-	client.AddEventHandler(func(evt any) {
-		if _, ok := evt.(*events.LoggedOut); ok {
-			m.log.Warnf("whatsapp session %s logged out remotely", sessionID)
-			client.Disconnect()
-			m.removeSession(sessionID)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := m.store.UpdateStatus(ctx, sessionID, domain.WhatsAppDisconnected); err != nil && !errors.Is(err, domain.ErrNotFound) {
-				m.log.Errorf("mark session %s disconnected failed: %v", sessionID, err)
-			}
-		}
-	})
-}
-
-// Restore reconnects sessions that were CONNECTED before the last shutdown. It
-// matches each persisted row to its whatsmeow device by JID; rows whose device
-// material is gone are demoted to DISCONNECTED.
-func (m *Manager) Restore(ctx context.Context) error {
-	rows, err := m.store.List(ctx)
+	png, err := qrcode.Encode(qr.QRCode, qrcode.Medium, 256)
 	if err != nil {
-		return fmt.Errorf("list sessions: %w", err)
+		_ = m.api.DeleteInstance(context.Background(), inst.ID)
+		m.forgetToken(inst.ID)
+		return "", "", fmt.Errorf("%w: %v", ErrQRUnavailable, err)
 	}
-	devices, err := m.container.GetAllDevices(ctx)
-	if err != nil {
-		return fmt.Errorf("get devices: %w", err)
-	}
-
-	byJID := make(map[string]*store.Device, len(devices))
-	for _, d := range devices {
-		byJID[d.GetJID().String()] = d
-	}
-
-	reconnected := 0
-	for _, row := range rows {
-		if row.Status != domain.WhatsAppConnected {
-			continue
-		}
-		dev, ok := byJID[row.JID]
-		if !ok || dev.ID == nil {
-			m.log.Warnf("session %s (%s) has no stored device, marking disconnected", row.ID, row.PhoneNumber)
-			_ = m.store.UpdateStatus(ctx, row.ID, domain.WhatsAppDisconnected)
-			continue
-		}
-		if err := m.bringUp(row.ID, dev); err != nil {
-			m.log.Errorf("reconnect session %s failed: %v", row.ID, err)
-			_ = m.store.UpdateStatus(ctx, row.ID, domain.WhatsAppDisconnected)
-			continue
-		}
-		reconnected++
-	}
-	m.log.Infof("whatsapp: reconnected %d session(s) on startup", reconnected)
-	return nil
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	m.log.Printf("whatsapp: created remote instance %s (%s)", inst.ID, name)
+	return inst.ID, dataURL, nil
 }
 
-// bringUp connects an already-paired device and registers it in the live map.
-func (m *Manager) bringUp(sessionID string, dev *store.Device) error {
-	m.mu.Lock()
-	if len(m.sessions) >= MaxSessions {
-		m.mu.Unlock()
-		return ErrLimitReached
-	}
-	client := whatsmeow.NewClient(dev, m.log.Sub("client-"+shortID(sessionID)))
-	m.sessions[sessionID] = &managedSession{id: sessionID, client: client}
-	m.mu.Unlock()
-
-	if err := client.Connect(); err != nil {
-		m.removeSession(sessionID)
-		return err
-	}
-	m.attachStatusHandler(sessionID, client)
-	return nil
-}
-
-// List returns every persisted session, overlaying the live connection state
-// from the in-memory registry so the UI reflects reality without DB write storms.
+// List returns every remote instance mapped to the Clicars session shape.
 func (m *Manager) List(ctx context.Context) ([]domain.WhatsAppSession, error) {
-	rows, err := m.store.List(ctx)
+	instances, err := m.api.ListInstances(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for i := range rows {
-		ms, ok := m.sessions[rows[i].ID]
-		switch {
-		case ok && ms.client != nil && ms.client.IsConnected() && ms.client.IsLoggedIn():
-			rows[i].Status = domain.WhatsAppConnected
-		case ok && ms.client != nil:
-			rows[i].Status = domain.WhatsAppConnecting // live but (re)connecting
-		default:
-			rows[i].Status = domain.WhatsAppDisconnected
-		}
+	out := make([]domain.WhatsAppSession, 0, len(instances))
+	for _, inst := range instances {
+		m.cacheToken(inst.ID, inst.Token)
+		out = append(out, mapInstance(inst))
 	}
-	return rows, nil
+	return out, nil
 }
 
-// Disconnect logs the number out of WhatsApp, removes its device material and
-// deletes the session row. Returns domain.ErrNotFound for an unknown id.
+// Disconnect deletes the remote instance (logout + remove).
 func (m *Manager) Disconnect(ctx context.Context, id string) error {
-	if _, err := m.store.GetByID(ctx, id); err != nil {
-		return err // domain.ErrNotFound propagates to a 404
-	}
-
-	m.mu.Lock()
-	ms := m.sessions[id]
-	delete(m.sessions, id)
-	m.mu.Unlock()
-
-	if ms != nil && ms.client != nil {
-		if ms.client.IsLoggedIn() {
-			if err := ms.client.Logout(ctx); err != nil { // Logout also deletes the device
-				m.log.Warnf("logout session %s: %v", id, err)
-				ms.client.Disconnect()
-			}
-		} else {
-			ms.client.Disconnect()
-			if ms.client.Store != nil && ms.client.Store.ID != nil {
-				if err := ms.client.Store.Delete(ctx); err != nil {
-					m.log.Warnf("delete device store for %s: %v", id, err)
-				}
-			}
+	if err := m.api.DeleteInstance(ctx, id); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrNotFound
 		}
-	}
-
-	if err := m.store.Delete(ctx, id); err != nil {
 		return err
 	}
-	m.log.Infof("whatsapp session %s disconnected and removed", id)
+	m.forgetToken(id)
+	m.log.Printf("whatsapp: deleted remote instance %s", id)
 	return nil
 }
 
-// PurgeExpired removes DISCONNECTED sessions older than `days` (45-day policy).
-func (m *Manager) PurgeExpired(ctx context.Context, days int) (int64, error) {
-	return m.store.DeleteOldDisconnected(ctx, days)
-}
+// Restore is a no-op: sessions live on the remote API and reconnect there.
+func (m *Manager) Restore(context.Context) error { return nil }
 
-// Shutdown disconnects every live client without logging out, so the same
-// devices can be reconnected on the next start (their rows stay CONNECTED).
-func (m *Manager) Shutdown() {
-	m.mu.Lock()
-	clients := make([]*whatsmeow.Client, 0, len(m.sessions))
-	for _, ms := range m.sessions {
-		if ms.client != nil {
-			clients = append(clients, ms.client)
-		}
-	}
-	m.sessions = make(map[string]*managedSession)
-	m.mu.Unlock()
+// PurgeExpired is a no-op: retention is owned by the WhatsApp API service.
+func (m *Manager) PurgeExpired(context.Context, int) (int64, error) { return 0, nil }
 
-	for _, c := range clients {
-		c.Disconnect()
-	}
-}
+// Shutdown is a no-op for the remote adapter (no local sockets to close).
+func (m *Manager) Shutdown() {}
 
-// --- Messaging (campaign dispatch) -----------------------------------------
-//
-// These three methods make the Manager satisfy campaign.Sender. They are the
-// only place outside pairing/teardown that touches a live client to talk to
-// WhatsApp, so they all funnel through liveClient, which enforces that the
-// session exists and is connected + logged in.
+// --- campaign.Sender --------------------------------------------------------
 
-// liveClient returns the connected, logged-in client for a session id, or
-// ErrSessionNotConnected if the session is unknown or not ready.
-func (m *Manager) liveClient(id string) (*whatsmeow.Client, error) {
-	m.mu.Lock()
-	ms, ok := m.sessions[id]
-	m.mu.Unlock()
-	if !ok || ms.client == nil || !ms.client.IsConnected() || !ms.client.IsLoggedIn() {
-		return nil, ErrSessionNotConnected
-	}
-	return ms.client, nil
-}
-
-// SessionReady reports whether a session currently has a live, logged-in client,
-// letting the dispatcher fail a campaign fast (clear error) before queuing work
-// to a number that can't send.
+// SessionReady reports whether the remote instance is connected.
 func (m *Manager) SessionReady(id string) bool {
-	_, err := m.liveClient(id)
-	return err == nil
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	inst, err := m.api.GetInstance(ctx, id)
+	if err != nil {
+		return false
+	}
+	m.cacheToken(inst.ID, inst.Token)
+	return mapStatus(inst.Status) == domain.WhatsAppConnected
 }
 
-// IsRegistered checks whether phone (international format, e.g. "+5511…") is on
-// WhatsApp using the given session, returning the canonical recipient JID to
-// send to. ok=false (nil error) means the number simply isn't on WhatsApp.
-func (m *Manager) IsRegistered(ctx context.Context, sessionID, phone string) (string, bool, error) {
-	client, err := m.liveClient(sessionID)
-	if err != nil {
-		return "", false, err
-	}
-	resp, err := client.IsOnWhatsApp(ctx, []string{phone})
-	if err != nil {
-		return "", false, fmt.Errorf("is-on-whatsapp: %w", err)
-	}
-	if len(resp) == 0 || !resp[0].IsIn {
+// IsRegistered normalises the phone for send. The remote API has no
+// IsOnWhatsApp endpoint, so validity is confirmed when SendText runs.
+func (m *Manager) IsRegistered(_ context.Context, _, phone string) (string, bool, error) {
+	d := digitsOnly(phone)
+	if d == "" {
 		return "", false, nil
 	}
-	return resp[0].JID.String(), true, nil
+	return d, true, nil
 }
 
-// SendText sends a plain-text message to recipientJID (as returned by
-// IsRegistered) through the given session.
-func (m *Manager) SendText(ctx context.Context, sessionID, recipientJID, text string) error {
-	client, err := m.liveClient(sessionID)
+// SendText sends a plain-text message through the remote instance token.
+// recipient may be digits or a JID; both are normalised to digits for the API.
+func (m *Manager) SendText(ctx context.Context, sessionID, recipient, text string) error {
+	token, err := m.tokenFor(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	jid, err := types.ParseJID(recipientJID)
-	if err != nil {
-		return fmt.Errorf("parse recipient jid %q: %w", recipientJID, err)
+	to := digitsOnly(recipient)
+	if to == "" {
+		return fmt.Errorf("invalid recipient %q", recipient)
 	}
-	if _, err := client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)}); err != nil {
-		return fmt.Errorf("send message: %w", err)
+	if _, err := m.api.SendText(ctx, token, to, text); err != nil {
+		return err
 	}
 	return nil
 }
 
-// disconnectAndRemove tears down a client and frees its slot. Safe to call more
-// than once for the same session.
-func (m *Manager) disconnectAndRemove(sessionID string, client *whatsmeow.Client) {
-	if client != nil {
-		client.Disconnect()
+func (m *Manager) tokenFor(ctx context.Context, id string) (string, error) {
+	m.mu.RLock()
+	tok := m.tokens[id]
+	m.mu.RUnlock()
+	if tok != "" {
+		return tok, nil
 	}
-	m.removeSession(sessionID)
+	inst, err := m.api.GetInstance(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", ErrSessionNotConnected
+		}
+		return "", err
+	}
+	if inst.Token == "" {
+		return "", ErrSessionNotConnected
+	}
+	m.cacheToken(inst.ID, inst.Token)
+	return inst.Token, nil
 }
 
-func (m *Manager) removeSession(id string) {
+func (m *Manager) cacheToken(id, token string) {
+	if id == "" || token == "" {
+		return
+	}
 	m.mu.Lock()
-	delete(m.sessions, id)
+	m.tokens[id] = token
 	m.mu.Unlock()
 }
 
-func shortID(id string) string {
-	if len(id) >= 8 {
-		return id[:8]
-	}
-	return id
+func (m *Manager) forgetToken(id string) {
+	m.mu.Lock()
+	delete(m.tokens, id)
+	m.mu.Unlock()
 }
+
+func mapInstance(inst remoteInstance) domain.WhatsAppSession {
+	return domain.WhatsAppSession{
+		ID:          inst.ID,
+		JID:         inst.DeviceJID,
+		PhoneNumber: digitsOnly(inst.PhoneNumber),
+		Status:      mapStatus(inst.Status),
+		CreatedAt:   inst.CreatedAt,
+	}
+}
+
+func mapStatus(remote string) string {
+	switch strings.ToLower(strings.TrimSpace(remote)) {
+	case "connected":
+		return domain.WhatsAppConnected
+	case "connecting", "qr_pending":
+		return domain.WhatsAppConnecting
+	default:
+		return domain.WhatsAppDisconnected
+	}
+}
+
+func digitsOnly(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+// Ensure *log.Logger satisfies Logger without importing in tests unnecessarily.
+var _ Logger = (*log.Logger)(nil)

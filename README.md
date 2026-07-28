@@ -1,8 +1,35 @@
 # Clicars Search
 
+[![CI](https://github.com/leonardo-turque/Clicars-Search/actions/workflows/ci.yml/badge.svg)](https://github.com/leonardo-turque/Clicars-Search/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/leonardo-turque/Clicars-Search?include_prereleases&sort=semver)](https://github.com/leonardo-turque/Clicars-Search/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](./backend/go.mod)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](./frontend/package.json)
+
 **Descubra empresas por nicho e localização em segundos.**
 
 O Clicars Search usa um **scraper próprio do Google Maps** (Chromium headless via [rod](https://github.com/go-rod/rod), **sem API key**) com um backend em Go e um dashboard Next.js para entregar listas de empresas — com nome, telefone e site — prontas para prospecção, sem nenhuma configuração manual.
+
+| | |
+|---|---|
+| **Versão atual** | [`v1.0.0`](https://github.com/leonardo-turque/Clicars-Search/releases/tag/v1.0.0) — ver [CHANGELOG](./CHANGELOG.md) |
+| **Contribuir** | [CONTRIBUTING.md](./CONTRIBUTING.md) — branches `feature/*` → `develop` → `main` |
+| **Segurança** | [SECURITY.md](./SECURITY.md) |
+| **Licença** | [MIT](./LICENSE) · Copyright © 2026 Zennitex |
+
+## Sumário
+
+- [Arquitetura](#arquitetura)
+- [Tecnologias](#tecnologias)
+- [Como rodar](#como-rodar)
+- [Variáveis de ambiente](#variáveis-de-ambiente)
+- [API](#api)
+- [WhatsApp (multi-dispositivo)](#whatsapp-multi-dispositivo)
+- [Banco de dados](#banco-de-dados)
+- [Testes](#testes)
+- [Comandos úteis](#comandos-úteis)
+- [Contribuindo](#contribuindo)
+- [Licença](#licença)
 
 ---
 
@@ -75,13 +102,19 @@ graph LR
 ### Passo a passo
 
 ```bash
-# 1. Clone o repositório
-git clone <repo-url>
-cd "Clicars Search"
+# 1. Clone o repositório (SSH)
+git clone git@github.com:leonardo-turque/Clicars-Search.git
+cd Clicars-Search
+
+# Com a chave SSH configurada como Host "github.com-leonardo":
+# git clone git@github.com-leonardo:leonardo-turque/Clicars-Search.git
 
 # 2. Configure as variáveis de ambiente
 cp .env.example .env
 # Os valores padrão já funcionam para rodar localmente.
+
+# Ative o hook local que bloqueia push direto em main:
+git config core.hooksPath .githooks
 
 # 3. Suba todos os serviços (Docker Desktop precisa estar aberto)
 docker compose up -d --build
@@ -361,6 +394,20 @@ docker compose down -v
 
 ---
 
+## Contribuindo
+
+Não faça commit nem push direto em `main`. O fluxo oficial é:
+
+```text
+feature/*  →  PR  →  develop  →  PR  →  main  →  tag vX.Y.Z
+```
+
+Detalhes, commits convencionais e checklist de PR: **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
+
+Histórico de versões: **[CHANGELOG.md](./CHANGELOG.md)**.
+
+---
+
 ## Licença
 
-MIT — veja [LICENSE](./LICENSE).
+Distribuído sob a licença **MIT**. Copyright © 2026 Zennitex — veja [LICENSE](./LICENSE).

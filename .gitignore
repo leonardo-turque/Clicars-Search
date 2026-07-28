@@ -14,6 +14,9 @@ backend/bin/
 .env.local
 .env.*.local
 
+# Local research / scrape caches
+.firecrawl/
+
 # Docker volume data (if using local bind mounts instead of named volumes)
 postgres_data/
 

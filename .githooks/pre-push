@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Blocks direct pushes to main/master. Enable with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+protected_branches='main master'
+remote_name="${1:-}"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [[ "$local_sha" == "0000000000000000000000000000000000000000" ]]; then
+    continue
+  fi
+  branch="${remote_ref#refs/heads/}"
+  for protected in $protected_branches; do
+    if [[ "$branch" == "$protected" ]]; then
+      echo ""
+      echo "ERROR: direct push to '$protected' is not allowed."
+      echo "Use a feature branch and open a Pull Request into develop (or main via PR)."
+      echo "See CONTRIBUTING.md for the branch model."
+      echo ""
+      exit 1
+    fi
+  done
+done
+
+exit 0

@@ -40,10 +40,11 @@ graph LR
     Browser["Navegador - Next.js 14"] -->|"/api/v1/searches"| API["Backend - Go 1.25"]
     Browser -->|"/api/v1/whatsapp/*"| API
     API -->|"Chromium headless rod"| GMaps["Google Maps - scraping direto"]
-    API -->|"whatsmeow multi-device"| WA["WhatsApp - ate 15 numeros"]
+    API -->|"HTTP X-Admin-Key / Bearer"| WA["WhatsApp API Zennitex"]
     API -->|"INSERT / SELECT / DELETE"| DB[("PostgreSQL 16")]
     GMaps -->|"resultados enriquecidos"| API
     DB -->|"dados persistidos - retencao 45 dias"| API
+    WA -->|"instancias + envio"| WhatsApp["WhatsApp multi-device"]
 ```
 
 ```
@@ -51,16 +52,16 @@ graph LR
 ├── docker-compose.yml          # Orquestra db + api + frontend
 ├── .env.example                # Variáveis de ambiente (copie para .env)
 ├── db/
-│   └── init.sql                # Schema: searches, companies, whatsapp_sessions
+│   └── init.sql                # Schema: searches, companies, campaigns
 ├── backend/                    # API Go (Clean Architecture)
 │   ├── Dockerfile
 │   ├── cmd/api/main.go         # Ponto de entrada, graceful shutdown
 │   └── internal/
 │       ├── domain/             # Entidades: Search, Company, WhatsAppSession, Campaign
 │       ├── usecase/            # PerformSearch (regras de negócio)
-│       ├── repository/         # Google Maps scraper + PostgreSQL (searches, whatsapp, campaigns)
-│       ├── campaign/           # Dispatch anti-ban (delay + rate limit + validação)
-│       ├── whatsapp/           # SessionManager multi-device (whatsmeow)
+│       ├── repository/         # Google Maps scraper + PostgreSQL
+│       ├── campaign/           # Dispatch anti-ban (delay + rate limit)
+│       ├── whatsapp/           # Cliente da API hospedada Zennitex
 │       └── delivery/http/      # Handlers: /api/v1/searches + /whatsapp + /campaigns
 └── frontend/                   # Dashboard Next.js
     ├── Dockerfile
@@ -81,7 +82,7 @@ graph LR
 | Frontend   | Next.js 14 · React 18 · Tailwind |
 | Banco      | PostgreSQL 16                    |
 | Busca/Scrape | Google Maps via rod (Chromium headless) — sem API key |
-| WhatsApp   | whatsmeow (multi-device)         |
+| WhatsApp   | API Zennitex (`whatsapp.zennitex.com.br`) |
 | Container  | Docker / Docker Compose          |
 
 ---
@@ -150,6 +151,8 @@ Crie `.env` na raiz (ou exporte as variáveis no shell). Veja `.env.example` par
 | `GOOGLEMAPS_CONCURRENCY`    | `10`                    | Goroutines de enrichment simultâneas                          |
 | `GOOGLEMAPS_SCROLL_TIMEOUT` | `30s`                   | Timeout por scroll no painel de resultados do Maps            |
 | `NEXT_PUBLIC_API_URL`       | `http://localhost:8080` | URL da API chamada pelo navegador — sobrescreva em produção    |
+| `WHATSAPP_API_URL`          | `https://whatsapp.zennitex.com.br/api` | Base da API WhatsApp Zennitex (inclui `/api`) |
+| `WHATSAPP_ADMIN_KEY`        | —                       | `API_SECRET_KEY` do painel WhatsApp (obrigatório p/ WA/campanhas) |
 
 ---
 
@@ -253,16 +256,23 @@ curl -X POST http://localhost:8080/api/v1/searches \
 
 ---
 
-## WhatsApp (multi-dispositivo)
+## WhatsApp (API Zennitex)
 
-Conecte até **15 números** simultâneos via QR Code. A biblioteca **whatsmeow**
-(`go.mau.fi/whatsmeow`) gerencia o material de sessão de cada dispositivo nas suas
-próprias tabelas (`whatsmeow_*`, criadas no boot); a tabela `whatsapp_sessions`
-guarda apenas os metadados da aplicação (número, status, e o JID em `session_data`).
+Conecte até **15 números** via QR Code. O Clicars Search **não embute** o
+WhatsApp: ele usa a API hospedada em [whatsapp.zennitex.com.br](https://whatsapp.zennitex.com.br)
+(`WHATSAPP_API_URL` + `WHATSAPP_ADMIN_KEY`). Pareamento, reconexão e envio ficam
+naquele serviço; o dashboard Clicars só orquestra e dispara campanhas.
+
+Configure no `.env`:
+
+```bash
+WHATSAPP_API_URL=https://whatsapp.zennitex.com.br/api
+WHATSAPP_ADMIN_KEY=<API_SECRET_KEY do painel WhatsApp>
+```
 
 ### `GET /api/v1/whatsapp/connect`
 
-Inicia o pareamento e retorna o QR Code como PNG em base64 (pronto para `<img src>`).
+Cria uma instância remota e retorna o QR Code como PNG em base64 (pronto para `<img src>`).
 O pareamento conclui de forma assíncrona — faça _polling_ em `GET …/sessions` até o
 novo número aparecer como `CONNECTED`.
 
@@ -282,20 +292,16 @@ Lista todos os números e o status ao vivo (`CONNECTED` / `CONNECTING` / `DISCON
 
 ### `DELETE /api/v1/whatsapp/sessions/{id}`
 
-Desconecta o número (logout no WhatsApp) e remove o registro. `204 No Content` em
-caso de sucesso, `404 Not Found` se o `id` não existir.
-
-Sessões `CONNECTED` são **reconectadas automaticamente** no startup; sessões
-`DISCONNECTED` com mais de 45 dias são removidas pelo worker de retenção.
+Remove a instância na API WhatsApp. `204 No Content` em caso de sucesso,
+`404 Not Found` se o `id` não existir.
 
 ---
 
 ## Banco de dados
 
-O script `db/init.sql` cria as tabelas `searches`, `companies` e `whatsapp_sessions`
-na primeira inicialização do container do Postgres. As tabelas `whatsmeow_*`
-(material de sessão dos dispositivos) são criadas em tempo de execução pelo
-`container.Upgrade()` do whatsmeow.
+O script `db/init.sql` cria as tabelas `searches`, `companies`, `campaigns` e
+filas de campanha na primeira inicialização do container do Postgres. Sessões
+WhatsApp vivem na API Zennitex (não no Postgres do Clicars).
 
 **Retenção de dados:** o serviço Go inicia automaticamente um worker de retenção (goroutine) que roda a cada **24 horas** e apaga buscas com mais de **45 dias**:
 

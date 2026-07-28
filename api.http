@@ -51,7 +51,7 @@ GET {{host}}/api/v1/searches
 
 
 ### ---------------------------------------------------------------------------
-### WhatsApp Multi-Device (whatsmeow)
+### WhatsApp (via API Zennitex — requer WHATSAPP_API_URL + WHATSAPP_ADMIN_KEY)
 ### ---------------------------------------------------------------------------
 
 ### 7. List WhatsApp sessions -> expect 200, array (possibly empty)

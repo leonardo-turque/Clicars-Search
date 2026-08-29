@@ -56,8 +56,8 @@ CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_jid        ON whatsapp_sessions
 -- Messaging campaigns (intelligent WhatsApp dispatch)
 --
 -- A campaign blasts one message_body to every phone discovered by a search,
--- through a single connected WhatsApp number, paced by the anti-ban dispatch
--- engine (random delay + per-number hourly rate limit + number validation).
+-- through a single connected WhatsApp number, paced by operational safeguards
+-- (queue delay + per-number hourly rate limit + number validation).
 --
 -- whatsapp_session_id is intentionally NOT a foreign key: a number can be
 -- disconnected/removed while its past campaigns must remain auditable. search_id
@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     search_id           UUID         NOT NULL REFERENCES searches(id) ON DELETE CASCADE,
     whatsapp_session_id UUID         NOT NULL,
     message_body        TEXT         NOT NULL,
+    consent_confirmed   BOOLEAN      NOT NULL DEFAULT FALSE,
     status              VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                         CHECK (status IN ('PENDING', 'RUNNING', 'COMPLETED')),
     total_count         INT          NOT NULL DEFAULT 0,
@@ -108,6 +109,54 @@ CREATE INDEX IF NOT EXISTS idx_campaign_messages_claim
     WHERE status = 'PENDING';
 CREATE INDEX IF NOT EXISTS idx_campaign_messages_campaign
     ON campaign_messages (campaign_id, status);
+
+-- ---------------------------------------------------------------------------
+-- Anti-ban / warmup engine (durable per-number health).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS whatsapp_number_profiles (
+    session_id          TEXT         PRIMARY KEY,
+    phone_number        VARCHAR(30)  NOT NULL DEFAULT '',
+    stage               VARCHAR(20)  NOT NULL DEFAULT 'WARMING'
+                        CHECK (stage IN ('WARMING', 'MATURE', 'PAUSED', 'COOLING')),
+    warmup_started_at   TIMESTAMP    NOT NULL DEFAULT NOW(),
+    warmup_day          INT          NOT NULL DEFAULT 1,
+    daily_cap           INT          NOT NULL DEFAULT 8,
+    target_daily        INT          NOT NULL DEFAULT 200,
+    health_score        INT          NOT NULL DEFAULT 70,
+    consecutive_errors  INT          NOT NULL DEFAULT 0,
+    circuit_open_until  TIMESTAMP,
+    last_error          TEXT,
+    last_sent_at        TIMESTAMP,
+    sent_today          INT          NOT NULL DEFAULT 0,
+    sent_today_date     DATE         NOT NULL DEFAULT CURRENT_DATE,
+    burst_count         INT          NOT NULL DEFAULT 0,
+    warmup_sent_today   INT          NOT NULL DEFAULT 0,
+    created_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wa_profiles_phone ON whatsapp_number_profiles (phone_number);
+
+CREATE TABLE IF NOT EXISTS whatsapp_send_events (
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id  TEXT         NOT NULL,
+    kind        VARCHAR(20)  NOT NULL DEFAULT 'CAMPAIGN'
+                CHECK (kind IN ('CAMPAIGN', 'WARMUP')),
+    phone       VARCHAR(30),
+    success     BOOLEAN      NOT NULL,
+    error       TEXT,
+    created_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wa_send_events_session_time
+    ON whatsapp_send_events (session_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS whatsapp_warmup_contacts (
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    phone        VARCHAR(30)  NOT NULL UNIQUE,
+    label        TEXT,
+    active       BOOLEAN      NOT NULL DEFAULT TRUE,
+    last_sent_at TIMESTAMP,
+    created_at   TIMESTAMP    NOT NULL DEFAULT NOW()
+);
 
 -- Cleanup function called periodically by the Go service (internal/usecase/cleanup).
 -- Deletes searches older than 45 days; companies and campaigns are removed via

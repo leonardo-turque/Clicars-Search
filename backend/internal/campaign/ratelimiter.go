@@ -7,7 +7,7 @@ import (
 )
 
 // rateLimiter is a sliding-window limiter: at most max events are allowed in any
-// rolling window. It is the per-number hourly cap of the anti-ban engine — one
+// rolling window. It is the per-number hourly governance cap — one
 // limiter exists per WhatsApp session id, so two campaigns sharing a number can
 // never jointly exceed the cap.
 //

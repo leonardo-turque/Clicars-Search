@@ -3,6 +3,7 @@ package campaign
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -281,7 +282,7 @@ func (s *fakeSender) sentCount() int {
 	return len(s.sent)
 }
 
-// newTestDispatcher collapses the anti-ban delays so tests run instantly while
+// newTestDispatcher collapses operational delays so tests run instantly while
 // still exercising the full delay/rate-limit/validate/send path.
 func newTestDispatcher(store Store, leads LeadSource, sender Sender) *Dispatcher {
 	d := NewDispatcher(store, leads, sender, nil)
@@ -311,7 +312,7 @@ func TestStartCampaign_HappyPath(t *testing.T) {
 	d := newTestDispatcher(store, leads, sender)
 	defer d.Shutdown(time.Second)
 
-	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Olá!")
+	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Olá!", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -331,6 +332,31 @@ func TestStartCampaign_HappyPath(t *testing.T) {
 	}
 }
 
+func TestStartCampaign_TwoHundredAuthorizedRecipients(t *testing.T) {
+	phones := make([]string, 200)
+	for i := range phones {
+		phones[i] = fmt.Sprintf("119%08d", i)
+	}
+
+	store := newMemStore()
+	sender := &fakeSender{ready: true}
+	d := newTestDispatcher(store, &fakeLeads{phones: phones}, sender)
+	defer d.Shutdown(time.Second)
+
+	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Mensagem autorizada", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Total != 200 {
+		t.Fatalf("expected 200 queued recipients, got %d", c.Total)
+	}
+
+	done := waitCompleted(t, store, c.ID)
+	if done.Sent != 200 || done.Failed != 0 {
+		t.Fatalf("expected 200 sent / 0 failed, got %d/%d", done.Sent, done.Failed)
+	}
+}
+
 func TestStartCampaign_SkipsInvalidNumbers(t *testing.T) {
 	store := newMemStore()
 	leads := &fakeLeads{phones: []string{"11999990001", "11999990002"}}
@@ -338,7 +364,7 @@ func TestStartCampaign_SkipsInvalidNumbers(t *testing.T) {
 	d := newTestDispatcher(store, leads, sender)
 	defer d.Shutdown(time.Second)
 
-	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Oi")
+	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Oi", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -359,7 +385,7 @@ func TestStartCampaign_SendErrorCountsAsFailed(t *testing.T) {
 	d := newTestDispatcher(store, leads, sender)
 	defer d.Shutdown(time.Second)
 
-	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Oi")
+	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Oi", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -377,7 +403,7 @@ func TestStartCampaign_NormalizesAndDedupes(t *testing.T) {
 	d := newTestDispatcher(store, leads, sender)
 	defer d.Shutdown(time.Second)
 
-	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Oi")
+	c, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Oi", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -388,6 +414,24 @@ func TestStartCampaign_NormalizesAndDedupes(t *testing.T) {
 	done := waitCompleted(t, store, c.ID)
 	if done.Sent != 1 {
 		t.Errorf("expected 1 sent, got %d", done.Sent)
+	}
+}
+
+func TestStartCampaign_RequiresConsentConfirmation(t *testing.T) {
+	store := newMemStore()
+	d := newTestDispatcher(
+		store,
+		&fakeLeads{phones: []string{"11999990001"}},
+		&fakeSender{ready: true},
+	)
+	defer d.Shutdown(time.Second)
+
+	_, err := d.StartCampaign(context.Background(), "search-1", "session-1", "Oi", false)
+	if !errors.Is(err, ErrConsentRequired) {
+		t.Fatalf("expected %v, got %v", ErrConsentRequired, err)
+	}
+	if len(store.campaigns) != 0 {
+		t.Fatal("campaign must not be persisted without consent confirmation")
 	}
 }
 
@@ -412,7 +456,7 @@ func TestStartCampaign_ValidationErrors(t *testing.T) {
 			d := newTestDispatcher(store, &fakeLeads{phones: tc.phones}, &fakeSender{ready: tc.ready})
 			defer d.Shutdown(time.Second)
 
-			_, err := d.StartCampaign(context.Background(), "search-1", tc.sessionID, tc.message)
+			_, err := d.StartCampaign(context.Background(), "search-1", tc.sessionID, tc.message, true)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { API_URL, digitsOnly, formatPhone } from '@/lib/format'
 
 type Status = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED'
 
@@ -17,7 +18,17 @@ interface ConnectResponse {
   qr_code: string // data:image/png;base64,...
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+interface ProtectSnap {
+  session_id: string
+  phone_number: string
+  stage: 'WARMING' | 'MATURE' | 'PAUSED' | 'COOLING'
+  daily_cap: number
+  sent_today: number
+  remaining_today: number
+  health_score: number
+  status_reason: string
+}
+
 const MAX_SLOTS = 15
 const POLL_MS = 3000
 const QR_TTL_SECONDS = 60
@@ -46,33 +57,22 @@ function StatusBadge({ status }: { status: Status }) {
   )
 }
 
-function formatPhone(raw: string): string {
-  if (!raw) return 'Número desconhecido'
-  // Brazilian-ish formatting: +55 (11) 99999-9999, best-effort for 12–13 digits.
-  const d = raw.replace(/\D/g, '')
-  if (d.length >= 12 && d.startsWith('55')) {
-    const ddd = d.slice(2, 4)
-    const rest = d.slice(4)
-    const mid = rest.slice(0, rest.length - 4)
-    const end = rest.slice(-4)
-    return `+55 (${ddd}) ${mid}-${end}`
-  }
-  return `+${d}`
-}
-
 function OccupiedSlot({
   session,
+  health,
   onDelete,
   deleting,
 }: {
   session: WhatsAppSession
+  health?: ProtectSnap
   onDelete: (id: string) => void
   deleting: boolean
 }) {
+  const primary = digitsOnly(session.phone_number) === '554184376916'
   return (
     <div
       data-testid="wa-slot"
-      className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col gap-4"
+      className="surface p-5 flex flex-col gap-4"
     >
       <div className="flex items-start justify-between">
         <div className="h-10 w-10 rounded-xl bg-green-50 flex items-center justify-center">
@@ -93,6 +93,14 @@ function OccupiedSlot({
             year: 'numeric',
           })}
         </p>
+        {primary && (
+          <p className="mt-1 text-[11px] font-semibold text-amber-700">Número principal · em aquecimento (21 dias)</p>
+        )}
+        {health && (
+          <p className="mt-1 text-xs text-gray-500">
+            {health.sent_today}/{health.daily_cap} hoje · saúde {health.health_score}
+          </p>
+        )}
       </div>
 
       <button
@@ -107,7 +115,7 @@ function OccupiedSlot({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
         )}
-        Desconectar / Excluir
+        Desconectar número
       </button>
     </div>
   )
@@ -118,14 +126,15 @@ function EmptySlot({ onConnect }: { onConnect: () => void }) {
     <button
       data-testid="wa-slot"
       onClick={onConnect}
-      className="group bg-white/50 rounded-2xl border-2 border-dashed border-gray-200 hover:border-blue-300 hover:bg-blue-50/40 transition-colors p-5 flex flex-col items-center justify-center gap-3 min-h-[184px]"
+      className="group rounded-[22px] border-2 border-dashed border-blue-200 bg-blue-50/40 hover:border-blue-400 hover:bg-blue-50 transition-colors p-5 flex flex-col items-center justify-center gap-3 min-h-[184px]"
     >
       <div className="h-10 w-10 rounded-full bg-gray-100 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
         <svg className="h-5 w-5 text-gray-400 group-hover:text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
         </svg>
       </div>
-      <span className="text-sm font-medium text-gray-500 group-hover:text-blue-700">Conectar Novo Número</span>
+      <span className="text-sm font-semibold text-gray-600 group-hover:text-blue-700">Conectar novo número</span>
+      <span className="max-w-[220px] text-center text-xs leading-relaxed text-gray-400">Leia o QR Code no aparelho que ficará responsável pelos atendimentos.</span>
     </button>
   )
 }
@@ -155,7 +164,7 @@ function QRModal({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 relative"
+        className="modal-panel bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 relative"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -214,6 +223,7 @@ function QRModal({
 
 export default function WhatsAppPanel() {
   const [sessions, setSessions] = useState<WhatsAppSession[]>([])
+  const [health, setHealth] = useState<ProtectSnap[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -234,6 +244,11 @@ export default function WhatsAppPanel() {
       const data: WhatsAppSession[] = await res.json()
       setSessions(data ?? [])
       setError(null)
+      const hRes = await fetch(`${API_URL}/api/v1/protect/numbers`)
+      if (hRes.ok) {
+        const hData: ProtectSnap[] = await hRes.json()
+        setHealth(hData ?? [])
+      }
     } catch (err) {
       if (err instanceof TypeError) {
         setError('Não foi possível conectar à API em ' + API_URL)
@@ -336,19 +351,37 @@ export default function WhatsAppPanel() {
 
   return (
     <main className="min-h-screen">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
+      <div className="page-shell">
         {/* Header */}
-        <div className="mb-8 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+        <div className="page-heading">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">WhatsApp</h1>
-            <p className="text-gray-500 text-sm mt-1">
-              Conecte até {MAX_SLOTS} números simultâneos via QR Code.
-            </p>
+            <p className="eyebrow">Canais conectados</p>
+            <h1 className="page-title">Números de WhatsApp</h1>
+            <p className="page-lead">Acompanhe as conexões usadas no atendimento e nas campanhas. O ritmo anti-ban fica na aba Proteção.</p>
           </div>
-          <div className="inline-flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 self-start">
+          <div className="inline-flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-4 py-3 self-start">
             <span className="h-2 w-2 rounded-full bg-green-500" />
             <span className="text-sm font-medium text-gray-700">{`${connectedCount} / ${MAX_SLOTS} conectados`}</span>
           </div>
+        </div>
+
+        <div className="metric-grid">
+          <div className="metric-card">
+            <small>Conectados agora</small>
+            <strong>{connectedCount}</strong>
+          </div>
+          <div className="metric-card">
+            <small>Disponíveis</small>
+            <strong>{emptySlots}</strong>
+          </div>
+          <div className="metric-card">
+            <small>Operação</small>
+            <strong className="!text-base text-green-700">Monitorada</strong>
+          </div>
+        </div>
+
+        <div className="notice-safe mb-6 rounded-2xl px-4 py-4 text-sm leading-relaxed sm:px-5">
+          <strong>Conexão não é autorização de marketing.</strong> Envie somente para pessoas que deram consentimento, identifique a empresa e respeite pedidos de saída. Limites técnicos não garantem que um número ficará livre de restrições.
         </div>
 
         {error && (
@@ -367,11 +400,15 @@ export default function WhatsAppPanel() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {sessions.map((s) => (
-              <OccupiedSlot key={s.id} session={s} onDelete={handleDelete} deleting={deletingId === s.id} />
+              <OccupiedSlot
+                key={s.id}
+                session={s}
+                health={health.find((h) => h.session_id === s.id || digitsOnly(h.phone_number) === digitsOnly(s.phone_number))}
+                onDelete={handleDelete}
+                deleting={deletingId === s.id}
+              />
             ))}
-            {Array.from({ length: emptySlots }).map((_, i) => (
-              <EmptySlot key={`empty-${i}`} onConnect={startConnect} />
-            ))}
+            {emptySlots > 0 && <EmptySlot onConnect={startConnect} />}
           </div>
         )}
       </div>

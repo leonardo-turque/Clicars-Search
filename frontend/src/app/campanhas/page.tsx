@@ -41,7 +41,7 @@ interface SearchDetail {
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const POLL_MS = 2500
 const MAX_MESSAGE = 1000
-const AVG_DELAY_S = 60
+const AVG_DELAY_S = 150
 
 // ---- Utility components ----
 
@@ -136,7 +136,7 @@ function DetailsModal({ campaign, onClose }: { campaign: CampaignSummary; onClos
   const pct = campaign.total > 0 ? Math.round((attempted / campaign.total) * 100) : 0
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 relative" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-panel bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 sm:p-6 relative" onClick={(e) => e.stopPropagation()}>
         <button onClick={onClose} aria-label="Fechar" className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -211,6 +211,7 @@ interface WizardState {
   selectedSearch: SearchSummary | null
   selectedSessionId: string
   message: string
+  consentConfirmed: boolean
   leadCount: number | null
   loadingLeads: boolean
 }
@@ -234,6 +235,7 @@ function NewCampaignWizard({
     selectedSearch: null,
     selectedSessionId: '',
     message: '',
+    consentConfirmed: false,
     leadCount: null,
     loadingLeads: false,
   })
@@ -282,6 +284,7 @@ function NewCampaignWizard({
           search_id: state.selectedSearch.id,
           whatsapp_session_id: state.selectedSessionId,
           message: state.message,
+          consent_confirmed: state.consentConfirmed,
         }),
       })
       const body = await res.json().catch(() => null)
@@ -297,7 +300,7 @@ function NewCampaignWizard({
 
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg relative" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-panel bg-white rounded-2xl shadow-xl w-full max-w-lg relative" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-gray-100">
           <button onClick={onClose} aria-label="Fechar" className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
@@ -305,9 +308,10 @@ function NewCampaignWizard({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
-          <h2 className="text-lg font-semibold text-gray-900">Nova Campanha</h2>
+          <p className="eyebrow">Envio responsável</p>
+          <h2 className="text-xl font-semibold text-gray-900">Nova campanha</h2>
           {/* Step indicator */}
-          <div className="flex items-center gap-2 mt-3">
+          <div className="flex items-center justify-between gap-1 sm:gap-2 mt-4 overflow-hidden">
             {([1, 2, 3] as WizardStep[]).map((s) => (
               <div key={s} className="flex items-center gap-2">
                 <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-semibold transition-colors
@@ -318,10 +322,10 @@ function NewCampaignWizard({
                     </svg>
                   ) : s}
                 </div>
-                <span className={`text-xs ${step === s ? 'text-gray-800 font-medium' : 'text-gray-400'}`}>
+                <span className={`hidden sm:inline text-xs ${step === s ? 'text-gray-800 font-medium' : 'text-gray-400'}`}>
                   {s === 1 ? 'Origem' : s === 2 ? 'Mensagem' : 'Revisão'}
                 </span>
-                {s < 3 && <div className="h-px w-6 bg-gray-200" />}
+                {s < 3 && <div className="h-px w-5 sm:w-6 bg-gray-200" />}
               </div>
             ))}
           </div>
@@ -398,6 +402,7 @@ function NewCampaignWizard({
                   className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-400 text-sm resize-none"
                 />
                 <p className="text-xs text-gray-400 mt-1 text-right">{state.message.length}/{MAX_MESSAGE}</p>
+                <p className="text-xs text-gray-500 mt-1">Use <code className="rounded bg-gray-100 px-1">{'{{saudacao}}'}</code> para Bom dia / Boa tarde / Boa noite automático.</p>
               </div>
             </div>
           )}
@@ -435,12 +440,21 @@ function NewCampaignWizard({
                   {state.message}
                 </div>
               </div>
-              <div className="flex items-start gap-2.5 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
-                <svg className="h-5 w-5 text-amber-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-                <p className="text-xs text-amber-800 leading-relaxed">
-                  <strong>Anti-ban:</strong> envio com intervalo aleatório de 30–90s. O disparo continua em segundo plano.
+              <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={state.consentConfirmed}
+                  onChange={(e) => setState((p) => ({ ...p, consentConfirmed: e.target.checked }))}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-xs leading-relaxed text-gray-700">
+                  Confirmo que todos os destinatários autorizaram este contato e que a mensagem identifica a empresa e oferece uma forma de saída.
+                </span>
+              </label>
+              <div className="notice-safe flex items-start gap-2.5 rounded-xl px-4 py-3">
+                <span aria-hidden="true" className="font-bold">✓</span>
+                <p className="text-xs leading-relaxed">
+                  A fila usa limites operacionais, mas nenhuma configuração garante entrega ou imunidade a restrições do provedor.
                 </p>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
@@ -449,10 +463,10 @@ function NewCampaignWizard({
         </div>
 
         {/* Footer navigation */}
-        <div className="px-6 pb-6 flex justify-between gap-2">
+        <div className="px-6 pb-6 flex flex-col-reverse sm:flex-row sm:justify-between gap-2">
           <button
             onClick={() => step > 1 ? setStep((s) => (s - 1) as WizardStep) : onClose()}
-            className="px-5 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium transition-colors"
+            className="w-full sm:w-auto px-5 py-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium transition-colors"
           >
             {step === 1 ? 'Cancelar' : 'Voltar'}
           </button>
@@ -463,18 +477,18 @@ function NewCampaignWizard({
                 (step === 2 && (sessions.length === 0 || !state.selectedSessionId || !state.message.trim()))
               }
               onClick={() => setStep((s) => (s + 1) as WizardStep)}
-              className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
             >
               Próximo
             </button>
           ) : (
             <button
-              disabled={submitting}
+              disabled={submitting || !state.consentConfirmed}
               onClick={handleSubmit}
-              className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
+              className="w-full sm:w-auto justify-center inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
             >
               {submitting && <Spinner />}
-              Iniciar Campanha
+              Criar campanha
             </button>
           )}
         </div>
@@ -544,24 +558,48 @@ export default function CampaignsPage() {
     if (updated) setDetailCampaign(updated)
   }, [campaigns, detailCampaign])
 
+  const activeCount = campaigns.filter((c) => c.status !== 'COMPLETED').length
+  const sentTotal = campaigns.reduce((sum, c) => sum + c.sent, 0)
+  const failedTotal = campaigns.reduce((sum, c) => sum + c.failed, 0)
+
   return (
     <main className="min-h-screen">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
+      <div className="page-shell">
         {/* Header */}
-        <div className="mb-8 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div className="page-heading">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Campanhas</h1>
-            <p className="text-gray-500 text-sm mt-1">Gerencie e monitore os disparos de WhatsApp.</p>
+            <p className="eyebrow">Central de envios</p>
+            <h1 className="page-title">Campanhas</h1>
+            <p className="page-lead">Acompanhe filas, entregas e falhas. O motor anti-ban limita cada número a 200 mensagens/dia com ritmo humano.</p>
           </div>
           <button
             onClick={() => setShowWizard(true)}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold transition-colors shadow-sm self-start sm:self-auto"
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold transition-colors shadow-sm self-start sm:self-auto"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            Nova Campanha
+            Nova campanha
           </button>
+        </div>
+
+        <div className="metric-grid">
+          <div className="metric-card">
+            <small>Em andamento</small>
+            <strong>{activeCount}</strong>
+          </div>
+          <div className="metric-card">
+            <small>Enviadas</small>
+            <strong>{sentTotal.toLocaleString('pt-BR')}</strong>
+          </div>
+          <div className="metric-card">
+            <small>Falhas registradas</small>
+            <strong className={failedTotal > 0 ? 'text-amber-700' : 'text-green-700'}>{failedTotal.toLocaleString('pt-BR')}</strong>
+          </div>
+        </div>
+
+        <div className="notice-safe mb-6 rounded-2xl px-4 py-4 text-sm leading-relaxed sm:px-5">
+          <strong>Antes de criar uma campanha:</strong> confirme que os destinatários autorizaram o contato. Dados públicos encontrados em uma busca não equivalem a consentimento para marketing.
         </div>
 
         {/* Error banner */}
@@ -575,7 +613,7 @@ export default function CampaignsPage() {
         )}
 
         {/* Campaigns table */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="surface overflow-hidden">
           {loading ? (
             <div className="flex justify-center py-20 text-gray-400">
               <Spinner className="h-8 w-8" />
@@ -591,7 +629,8 @@ export default function CampaignsPage() {
               <p className="text-gray-400 text-sm mt-1">Clique em &ldquo;Nova Campanha&rdquo; para começar.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            <div className="desktop-table overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
@@ -637,6 +676,32 @@ export default function CampaignsPage() {
                 </tbody>
               </table>
             </div>
+            <div className="mobile-card-list">
+              {campaigns.map((c) => (
+                <article key={`mobile-${c.id}`} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-sm font-semibold text-gray-900">{c.search_niche}</h2>
+                      <p className="mt-1 truncate text-xs text-gray-500">{c.search_location}</p>
+                    </div>
+                    <StatusBadge status={c.status} />
+                  </div>
+                  <div className="mt-4">
+                    <ProgressBar sent={c.sent} failed={c.failed} total={c.total} />
+                  </div>
+                  <div className="mt-4 flex items-end justify-between gap-3 border-t border-gray-100 pt-3">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Remetente</p>
+                      <p className="mt-1 text-xs font-medium text-gray-700">{c.phone_number ? formatPhone(c.phone_number) : 'Não disponível'}</p>
+                    </div>
+                    <button onClick={() => setDetailCampaign(c)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700">
+                      Detalhes
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+            </>
           )}
         </div>
       </div>

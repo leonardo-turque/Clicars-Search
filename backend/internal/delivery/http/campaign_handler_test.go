@@ -21,7 +21,7 @@ type fakeCampaignService struct {
 	getErr   error
 }
 
-func (f *fakeCampaignService) StartCampaign(context.Context, string, string, string) (*domain.Campaign, error) {
+func (f *fakeCampaignService) StartCampaign(context.Context, string, string, string, bool) (*domain.Campaign, error) {
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
@@ -60,13 +60,13 @@ func postCampaign(t *testing.T, url, body string) *http.Response {
 func TestCampaignCreate_Created(t *testing.T) {
 	c := &domain.Campaign{
 		ID: "11111111-1111-1111-1111-111111111111", SearchID: "s1",
-		WhatsAppSessionID: "w1", Status: domain.CampaignPending, Total: 10,
+		WhatsAppSessionID: "w1", Status: domain.CampaignPending, Total: 10, ConsentConfirmed: true,
 		CreatedAt: time.Now(),
 	}
 	srv := newCampaignServer(&fakeCampaignService{campaign: c})
 	defer srv.Close()
 
-	resp := postCampaign(t, srv.URL, `{"search_id":"s1","whatsapp_session_id":"w1","message":"Oi"}`)
+	resp := postCampaign(t, srv.URL, `{"search_id":"s1","whatsapp_session_id":"w1","message":"Oi","consent_confirmed":true}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
@@ -94,13 +94,14 @@ func TestCampaignCreate_ErrorMapping(t *testing.T) {
 		{"no session", campaign.ErrNoSession, http.StatusBadRequest},
 		{"session not ready", campaign.ErrSessionNotReady, http.StatusConflict},
 		{"no leads", campaign.ErrNoLeads, http.StatusNotFound},
+		{"consent required", campaign.ErrConsentRequired, http.StatusUnprocessableEntity},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newCampaignServer(&fakeCampaignService{startErr: tc.startErr})
 			defer srv.Close()
 
-			resp := postCampaign(t, srv.URL, `{"search_id":"s1","whatsapp_session_id":"w1","message":"Oi"}`)
+			resp := postCampaign(t, srv.URL, `{"search_id":"s1","whatsapp_session_id":"w1","message":"Oi","consent_confirmed":true}`)
 			defer resp.Body.Close()
 			if resp.StatusCode != tc.want {
 				t.Errorf("expected %d, got %d", tc.want, resp.StatusCode)
@@ -117,6 +118,17 @@ func TestCampaignCreate_BadJSON(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestCampaignCreate_RequiresConsentConfirmation(t *testing.T) {
+	srv := newCampaignServer(&fakeCampaignService{campaign: &domain.Campaign{}})
+	defer srv.Close()
+
+	resp := postCampaign(t, srv.URL, `{"search_id":"s1","whatsapp_session_id":"w1","message":"Oi"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("expected 422, got %d", resp.StatusCode)
 	}
 }
 

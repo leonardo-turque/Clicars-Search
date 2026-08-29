@@ -48,6 +48,8 @@ func (r *CampaignRepository) EnsureSchema(ctx context.Context) error {
 		    ON campaign_messages (campaign_id, status);
 		CREATE INDEX IF NOT EXISTS idx_campaigns_session_status
 		    ON campaigns (whatsapp_session_id, status);
+		ALTER TABLE campaigns
+		    ADD COLUMN IF NOT EXISTS consent_confirmed BOOLEAN NOT NULL DEFAULT FALSE;
 	`)
 	if err != nil {
 		return fmt.Errorf("ensure campaign schema: %w", err)
@@ -57,7 +59,7 @@ func (r *CampaignRepository) EnsureSchema(ctx context.Context) error {
 
 // campaignColumns is the canonical projection shared by every campaign read.
 const campaignColumns = `id::text, search_id::text, whatsapp_session_id::text,
-	message_body, status, total_count, sent_count, failed_count, created_at`
+	message_body, consent_confirmed, status, total_count, sent_count, failed_count, created_at`
 
 // Create inserts a new campaign row and writes the generated id/created_at back
 // onto the entity. The caller supplies SearchID, WhatsAppSessionID, MessageBody,
@@ -65,10 +67,10 @@ const campaignColumns = `id::text, search_id::text, whatsapp_session_id::text,
 func (r *CampaignRepository) Create(ctx context.Context, c *domain.Campaign) error {
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO campaigns
-		     (search_id, whatsapp_session_id, message_body, status, total_count)
-		 VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+		     (search_id, whatsapp_session_id, message_body, consent_confirmed, status, total_count)
+		 VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
 		 RETURNING id::text, created_at`,
-		c.SearchID, c.WhatsAppSessionID, c.MessageBody, c.Status, c.Total,
+		c.SearchID, c.WhatsAppSessionID, c.MessageBody, c.ConsentConfirmed, c.Status, c.Total,
 	).Scan(&c.ID, &c.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert campaign: %w", err)
@@ -160,7 +162,7 @@ func (r *CampaignRepository) GetByID(ctx context.Context, id string) (*domain.Ca
 		`SELECT `+campaignColumns+` FROM campaigns WHERE id = $1::uuid`,
 		id,
 	).Scan(&c.ID, &c.SearchID, &c.WhatsAppSessionID, &c.MessageBody,
-		&c.Status, &c.Total, &c.Sent, &c.Failed, &c.CreatedAt)
+		&c.ConsentConfirmed, &c.Status, &c.Total, &c.Sent, &c.Failed, &c.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrNotFound
@@ -176,7 +178,7 @@ func (r *CampaignRepository) ListAll(ctx context.Context, limit int) ([]domain.C
 	rows, err := r.pool.Query(ctx, `
 		SELECT
 			c.id::text, c.search_id::text, c.whatsapp_session_id::text,
-			c.message_body, c.status, c.total_count, c.sent_count, c.failed_count, c.created_at,
+			c.message_body, c.consent_confirmed, c.status, c.total_count, c.sent_count, c.failed_count, c.created_at,
 			s.niche, s.location,
 			COALESCE(ws.phone_number, '') AS phone_number
 		FROM campaigns c
@@ -194,7 +196,7 @@ func (r *CampaignRepository) ListAll(ctx context.Context, limit int) ([]domain.C
 		var cs domain.CampaignSummary
 		if err := rows.Scan(
 			&cs.ID, &cs.SearchID, &cs.WhatsAppSessionID,
-			&cs.MessageBody, &cs.Status, &cs.Total, &cs.Sent, &cs.Failed, &cs.CreatedAt,
+			&cs.MessageBody, &cs.ConsentConfirmed, &cs.Status, &cs.Total, &cs.Sent, &cs.Failed, &cs.CreatedAt,
 			&cs.SearchNiche, &cs.SearchLocation, &cs.PhoneNumber,
 		); err != nil {
 			return nil, fmt.Errorf("scan campaign summary: %w", err)

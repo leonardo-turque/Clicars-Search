@@ -22,13 +22,13 @@ import (
 
 // Google Maps DOM selectors — these may need adjustment if Google changes its markup.
 const (
-	selResultsFeed  = `div[role="feed"]`
-	selPlaceLink    = `div[role="feed"] a[href*="/maps/place/"]`
-	selPlaceName    = `h1.DUwDvf`
-	selAddressBtn   = `button[data-item-id="address"]`
-	selPhoneBtn     = `button[data-item-id^="phone:tel:"]`
-	selWebsiteLink  = `a[data-item-id="authority"]`
-	selInnerText    = `.Io6YTe`
+	selResultsFeed = `div[role="feed"]`
+	selPlaceLink   = `div[role="feed"] a[href*="/maps/place/"]`
+	selPlaceName   = `h1.DUwDvf`
+	selAddressBtn  = `button[data-item-id="address"]`
+	selPhoneBtn    = `button[data-item-id^="phone:tel:"]`
+	selWebsiteLink = `a[data-item-id="authority"]`
+	selInnerText   = `.Io6YTe`
 
 	mapsSearchURL   = "https://www.google.com/maps/search/"
 	pageLoadTimeout = 20 * time.Second
@@ -510,6 +510,10 @@ func browserBin() string {
 func newBrowser() (*rod.Browser, error) {
 	l := launcher.New().
 		Headless(true).
+		// The leakless helper is frequently blocked by Windows Defender as a
+		// potentially unwanted executable. The browser pool already owns and
+		// closes every process, so disabling the helper keeps local runs reliable.
+		Leakless(false).
 		// Anti-detection
 		Set("disable-blink-features", "AutomationControlled").
 		// Required in container environments

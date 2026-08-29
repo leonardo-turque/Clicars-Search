@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Motor anti-ban + aquecimento automático em 4 fases (21 dias, teto 200/dia)
+- Número `554184376916` entra no dia 1 da rampa (não pula fases)
+- Painel `/protecao` e API `/api/v1/protect/*`
+- Front responsivo (nav 4 abas, viewport, inputs 16px no mobile)
+
 ### Planned
 
 - Integration with the hosted Zennitex WhatsApp API (see `feature/whatsapp-api-zennitex`)

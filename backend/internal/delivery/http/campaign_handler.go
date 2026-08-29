@@ -15,7 +15,7 @@ import (
 // CampaignService is the contract the handler depends on, implemented by
 // campaign.Dispatcher.
 type CampaignService interface {
-	StartCampaign(ctx context.Context, searchID, sessionID, message string) (*domain.Campaign, error)
+	StartCampaign(ctx context.Context, searchID, sessionID, message string, consentConfirmed bool) (*domain.Campaign, error)
 	GetCampaign(ctx context.Context, id string) (*domain.Campaign, error)
 	ListCampaigns(ctx context.Context, limit int) ([]domain.CampaignSummary, error)
 }
@@ -38,21 +38,24 @@ func (h *CampaignHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 type campaignRequest struct {
-	SearchID  string `json:"search_id"`
-	SessionID string `json:"whatsapp_session_id"`
-	Message   string `json:"message"`
+	SearchID         string `json:"search_id"`
+	SessionID        string `json:"whatsapp_session_id"`
+	Message          string `json:"message"`
+	ConsentConfirmed bool   `json:"consent_confirmed"`
 }
 
 type campaignResponse struct {
 	ID                string    `json:"id"`
 	SearchID          string    `json:"search_id"`
 	WhatsAppSessionID string    `json:"whatsapp_session_id"`
+	MessageBody       string    `json:"message_body"`
 	Status            string    `json:"status"`
 	Total             int       `json:"total"`
 	Sent              int       `json:"sent"`
 	Failed            int       `json:"failed"`
 	Progress          string    `json:"progress"` // e.g. "15 de 100 enviados"
 	CreatedAt         time.Time `json:"created_at"`
+	ConsentConfirmed  bool      `json:"consent_confirmed"`
 }
 
 type campaignSummaryResponse struct {
@@ -67,12 +70,14 @@ func toCampaignResponse(c *domain.Campaign) campaignResponse {
 		ID:                c.ID,
 		SearchID:          c.SearchID,
 		WhatsAppSessionID: c.WhatsAppSessionID,
+		MessageBody:       c.MessageBody,
 		Status:            c.Status,
 		Total:             c.Total,
 		Sent:              c.Sent,
 		Failed:            c.Failed,
 		Progress:          fmt.Sprintf("%d de %d enviados", c.Sent, c.Total),
 		CreatedAt:         c.CreatedAt,
+		ConsentConfirmed:  c.ConsentConfirmed,
 	}
 }
 
@@ -111,11 +116,15 @@ func (h *CampaignHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
+	if !req.ConsentConfirmed {
+		writeError(w, http.StatusUnprocessableEntity, "confirme que os destinatários autorizaram este contato")
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	c, err := h.svc.StartCampaign(ctx, req.SearchID, req.SessionID, req.Message)
+	c, err := h.svc.StartCampaign(ctx, req.SearchID, req.SessionID, req.Message, req.ConsentConfirmed)
 	if err != nil {
 		switch {
 		case errors.Is(err, campaign.ErrEmptyMessage):
@@ -126,6 +135,8 @@ func (h *CampaignHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "o número de WhatsApp selecionado não está conectado")
 		case errors.Is(err, campaign.ErrNoLeads):
 			writeError(w, http.StatusNotFound, "nenhum telefone encontrado para esta busca")
+		case errors.Is(err, campaign.ErrConsentRequired):
+			writeError(w, http.StatusUnprocessableEntity, "confirme que os destinatários autorizaram este contato")
 		default:
 			writeError(w, http.StatusInternalServerError, "falha ao iniciar a campanha")
 		}

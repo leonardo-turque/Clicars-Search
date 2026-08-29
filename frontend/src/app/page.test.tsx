@@ -14,7 +14,7 @@ describe('Dashboard (search form)', () => {
   it('renders the search form with its fields and the submit button', () => {
     render(<Dashboard />)
 
-    expect(screen.getByRole('heading', { name: /clicars search/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /encontre as empresas certas/i })).toBeInTheDocument()
     expect(screen.getByLabelText(/nicho/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/cidade/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/quantidade/i)).toBeInTheDocument()
@@ -89,13 +89,14 @@ describe('Dashboard (search form)', () => {
     await user.type(screen.getByLabelText(/cidade/i), 'São Paulo')
     await user.click(screen.getByRole('button', { name: /buscar empresas/i }))
 
-    // Results render after polling; the "Iniciar Campanha" CTA opens the dispatch panel.
-    const startBtn = await screen.findByRole('button', { name: /iniciar campanha/i })
+    // Results render after polling; the campaign CTA opens the dispatch panel.
+    const startBtn = await screen.findByRole('button', { name: /criar campanha/i })
     await user.click(startBtn)
 
-    // The panel shows the anti-ban notice and offers the connected number.
+    // The panel requires consent confirmation and offers the connected number.
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(await screen.findByText(/disparo inteligente \(anti-ban\)/i)).toBeInTheDocument()
+    expect(await screen.findByRole('checkbox')).toBeInTheDocument()
+    expect(screen.getByText(/autorizaram mensagens/i)).toBeInTheDocument()
     await waitFor(() =>
       expect(screen.getByRole('option', { name: /98888-7777/ })).toBeInTheDocument(),
     )

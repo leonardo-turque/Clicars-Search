@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/zennitex/clicars-search/internal/campaign"
 	deliveryhttp "github.com/zennitex/clicars-search/internal/delivery/http"
+	"github.com/zennitex/clicars-search/internal/protect"
 	"github.com/zennitex/clicars-search/internal/repository"
 	"github.com/zennitex/clicars-search/internal/usecase"
 	"github.com/zennitex/clicars-search/internal/whatsapp"
@@ -53,6 +55,7 @@ func main() {
 	// still comes up; only WhatsApp routes and campaign dispatch are skipped.
 	var dispatcher *campaign.Dispatcher
 	var waManager *whatsapp.Manager
+	var protectEngine *protect.Engine
 	waManager, waErr := whatsapp.NewManager(
 		getEnv("WHATSAPP_API_URL", ""),
 		getEnv("WHATSAPP_ADMIN_KEY", ""),
@@ -64,27 +67,56 @@ func main() {
 		waHandler := deliveryhttp.NewWhatsAppHandler(waManager)
 		waHandler.RegisterRoutes(mux)
 
+		protectStore := protect.NewStore(pool)
+		if err := protectStore.EnsureSchema(context.Background()); err != nil {
+			log.Fatalf("protect schema: %v", err)
+		}
+		lunchFrom, lunchTo := 12, 13
+		if strings.EqualFold(getEnv("PROTECT_LUNCH_PAUSE", "on"), "off") {
+			lunchFrom, lunchTo = 0, 0
+		}
+		protectEngine = protect.NewEngine(protectStore, protect.Config{
+			Timezone:          getEnv("PROTECT_TIMEZONE", "America/Sao_Paulo"),
+			BusinessStartHour: envInt("PROTECT_START_HOUR", 8),
+			BusinessEndHour:   envInt("PROTECT_END_HOUR", 20),
+			LunchFrom:         lunchFrom,
+			LunchTo:           lunchTo,
+			DailyTarget:       envInt("PROTECT_DAILY_TARGET", 200),
+			MinDelay:          envDuration("PROTECT_MIN_DELAY", 90*time.Second),
+			MaxDelay:          envDuration("PROTECT_MAX_DELAY", 4*time.Minute),
+			RestEvery:         envInt("PROTECT_REST_EVERY", 10),
+			RestMin:           envDuration("PROTECT_REST_MIN", 4*time.Minute),
+			RestMax:           envDuration("PROTECT_REST_MAX", 12*time.Minute),
+			WeekendFactor:     0.55,
+			MaturePhones:      envCSV("WARMUP_MATURE_PHONES", nil),
+			PrimaryPhones:     envCSV("WARMUP_PRIMARY_PHONES", []string{protect.PrimaryPhone}),
+			WarmupInterval:    envDuration("WARMUP_INTERVAL", 8*time.Minute),
+			WarmupTick:        envDuration("WARMUP_TICK", 3*time.Minute),
+		}, log.Default(), nil)
+		protectEngine.Attach(waManager, waManager)
+		deliveryhttp.NewProtectHandler(protectEngine).RegisterRoutes(mux)
+
 		dispatcher = campaign.NewDispatcherWithConfig(
 			campaignRepo, campaignRepo, waManager, log.Default(),
 			campaign.Config{
-				MinDelay:    envDuration("CAMPAIGN_MIN_DELAY", 30*time.Second),
-				MaxDelay:    envDuration("CAMPAIGN_MAX_DELAY", 90*time.Second),
-				RatePerHour: envInt("CAMPAIGN_RATE_PER_HOUR", 30),
+				MinDelay:    envDuration("CAMPAIGN_MIN_DELAY", 90*time.Second),
+				MaxDelay:    envDuration("CAMPAIGN_MAX_DELAY", 4*time.Minute),
+				RatePerHour: envInt("CAMPAIGN_RATE_PER_HOUR", 20),
 				MaxWorkers:  envInt("CAMPAIGN_MAX_WORKERS", 5),
+				Guard:       protectEngine,
 			},
 		)
 		deliveryhttp.NewCampaignHandler(dispatcher).RegisterRoutes(mux)
 
 		go func() {
-			// Remote sessions reconnect on the WhatsApp API itself; just resume queues.
+			protectEngine.Start()
 			dispatcher.Start()
 		}()
 		log.Printf("whatsapp: enabled via %s (max %d sessions)",
 			getEnv("WHATSAPP_API_URL", ""), whatsapp.MaxSessions)
-		log.Printf("campaigns: enabled (durable queue: %s–%s delay, %d/h per number)",
-			envDuration("CAMPAIGN_MIN_DELAY", 30*time.Second),
-			envDuration("CAMPAIGN_MAX_DELAY", 90*time.Second),
-			envInt("CAMPAIGN_RATE_PER_HOUR", 30),
+		log.Printf("protect: anti-ban + warmup enabled (target %d/day, primary=%s)",
+			envInt("PROTECT_DAILY_TARGET", 200),
+			strings.Join(envCSV("WARMUP_PRIMARY_PHONES", []string{protect.PrimaryPhone}), ","),
 		)
 	}
 
@@ -139,6 +171,9 @@ func main() {
 	if dispatcher != nil {
 		dispatcher.Shutdown(10 * time.Second)
 	}
+	if protectEngine != nil {
+		protectEngine.Shutdown(5 * time.Second)
+	}
 	if waManager != nil {
 		waManager.Shutdown()
 	}
@@ -191,6 +226,25 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envCSV(key string, fallback []string) []string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {

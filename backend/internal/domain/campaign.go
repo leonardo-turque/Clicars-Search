@@ -23,13 +23,14 @@ const (
 
 // Campaign is one bulk WhatsApp dispatch: a single message_body sent to every
 // phone discovered by a Search, through one connected WhatsApp number, paced by
-// the anti-ban engine. Total/Sent/Failed track live progress (Sent+Failed is the
+// the controlled queue. Total/Sent/Failed track live progress (Sent+Failed is the
 // number of leads already attempted out of Total).
 type Campaign struct {
 	ID                string    `json:"id"`
 	SearchID          string    `json:"search_id"`
 	WhatsAppSessionID string    `json:"whatsapp_session_id"`
 	MessageBody       string    `json:"message_body"`
+	ConsentConfirmed  bool      `json:"consent_confirmed"`
 	Status            string    `json:"status"`
 	Total             int       `json:"total"`
 	Sent              int       `json:"sent"`

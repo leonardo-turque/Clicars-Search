@@ -1,7 +1,7 @@
 // Package campaign implements the intelligent WhatsApp dispatch engine. A
 // campaign enqueues one durable message row per lead, then a background worker
-// drains the queue through a connected WhatsApp number with three anti-ban
-// layers:
+// drains the queue through a connected WhatsApp number with three operational
+// safeguards:
 //
 //   - Intelligent delay: a random pause between messages (default 30–90 s).
 //   - Per-number rate limiting: a hard hourly ceiling per WhatsApp number.
@@ -22,9 +22,10 @@ import (
 	"time"
 
 	"github.com/zennitex/clicars-search/internal/domain"
+	"github.com/zennitex/clicars-search/internal/protect"
 )
 
-// Defaults for the anti-ban engine. Overridable via DispatcherConfig / env.
+// Defaults for responsible queue pacing. Overridable via DispatcherConfig / env.
 const (
 	defaultMinDelay    = 30 * time.Second
 	defaultMaxDelay    = 90 * time.Second
@@ -43,6 +44,7 @@ var (
 	ErrNoSession       = errors.New("whatsapp_session_id is required")
 	ErrNoLeads         = errors.New("no phone numbers found for this search")
 	ErrSessionNotReady = errors.New("whatsapp number is not connected")
+	ErrConsentRequired = errors.New("recipient consent confirmation is required")
 )
 
 // Store persists campaigns and the durable per-recipient queue.
@@ -74,6 +76,14 @@ type Sender interface {
 	SendText(ctx context.Context, sessionID, recipientJID, text string) error
 }
 
+// Guard is the anti-ban / warmup gate. A nil Guard keeps the legacy in-process
+// delay + hourly limiter (used by unit tests).
+type Guard interface {
+	Evaluate(ctx context.Context, sessionID string) (protect.Decision, error)
+	Record(ctx context.Context, sessionID string, success bool, errMsg string)
+	RenderMessage(body string) string
+}
+
 // Logger is the minimal logging port; *log.Logger satisfies it.
 type Logger interface {
 	Printf(format string, v ...any)
@@ -83,12 +93,13 @@ type nopLogger struct{}
 
 func (nopLogger) Printf(string, ...any) {}
 
-// Config holds anti-ban pacing knobs (typically loaded from env).
+// Config holds queue pacing controls (typically loaded from env).
 type Config struct {
 	MinDelay    time.Duration
 	MaxDelay    time.Duration
 	RatePerHour int
 	MaxWorkers  int
+	Guard       Guard
 }
 
 // Dispatcher owns background session workers and their pacing state.
@@ -102,6 +113,7 @@ type Dispatcher struct {
 	maxDelay    time.Duration
 	ratePerHour int
 	maxWorkers  int
+	guard       Guard
 
 	sem chan struct{} // bounds concurrent session workers
 
@@ -115,13 +127,13 @@ type Dispatcher struct {
 	wg     sync.WaitGroup
 }
 
-// NewDispatcher wires the engine with the anti-ban defaults.
+// NewDispatcher wires the engine with conservative pacing defaults.
 func NewDispatcher(store Store, leads LeadSource, sender Sender, logger Logger) *Dispatcher {
 	return NewDispatcherWithConfig(store, leads, sender, logger, Config{})
 }
 
 // NewDispatcherWithConfig wires the engine with explicit pacing overrides.
-// Zero-valued fields fall back to the safe anti-ban defaults.
+// Zero-valued fields fall back to conservative pacing defaults.
 func NewDispatcherWithConfig(store Store, leads LeadSource, sender Sender, logger Logger, cfg Config) *Dispatcher {
 	if logger == nil {
 		logger = nopLogger{}
@@ -152,6 +164,7 @@ func NewDispatcherWithConfig(store Store, leads LeadSource, sender Sender, logge
 		maxDelay:    cfg.MaxDelay,
 		ratePerHour: cfg.RatePerHour,
 		maxWorkers:  cfg.MaxWorkers,
+		guard:       cfg.Guard,
 		sem:         make(chan struct{}, cfg.MaxWorkers),
 		limiters:    make(map[string]*rateLimiter),
 		workers:     make(map[string]struct{}),
@@ -192,13 +205,16 @@ func (d *Dispatcher) Start() {
 // every normalised phone into campaign_messages, and wakes the session worker.
 // It returns as soon as the queue is durable — the HTTP handler never blocks on
 // the actual sending.
-func (d *Dispatcher) StartCampaign(ctx context.Context, searchID, sessionID, message string) (*domain.Campaign, error) {
+func (d *Dispatcher) StartCampaign(ctx context.Context, searchID, sessionID, message string, consentConfirmed bool) (*domain.Campaign, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return nil, ErrEmptyMessage
 	}
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, ErrNoSession
+	}
+	if !consentConfirmed {
+		return nil, ErrConsentRequired
 	}
 	if !d.sender.SessionReady(sessionID) {
 		return nil, ErrSessionNotReady
@@ -217,6 +233,7 @@ func (d *Dispatcher) StartCampaign(ctx context.Context, searchID, sessionID, mes
 		SearchID:          searchID,
 		WhatsAppSessionID: sessionID,
 		MessageBody:       message,
+		ConsentConfirmed:  true,
 		Status:            domain.CampaignPending,
 		Total:             len(phones),
 	}
@@ -285,7 +302,10 @@ func (d *Dispatcher) sessionWorker(sessionID string) {
 	}()
 
 	d.log.Printf("campaigns: worker started for session %s", sessionID)
-	limiter := d.limiterFor(sessionID)
+	var limiter *rateLimiter
+	if d.guard == nil {
+		limiter = d.limiterFor(sessionID)
+	}
 
 	for {
 		if d.ctx.Err() != nil {
@@ -341,16 +361,47 @@ func (d *Dispatcher) sessionWorker(sessionID string) {
 			continue
 		}
 
-		if delay := d.paceDelay(sessionID); delay > 0 {
-			if !d.sleep(delay) {
-				_ = d.reschedule(msg.ID, time.Now(), "shutdown during delay")
+		if d.guard != nil {
+			dec, gerr := d.guard.Evaluate(d.ctx, sessionID)
+			if gerr != nil {
+				d.log.Printf("campaigns: protect evaluate on %s: %v", sessionID, gerr)
+				_ = d.reschedule(msg.ID, time.Now().Add(idlePollInterval), "protect evaluate failed")
+				if !d.sleep(idlePollInterval) {
+					return
+				}
+				continue
+			}
+			if !dec.Allow {
+				wait := dec.Wait
+				if wait < idlePollInterval {
+					wait = idlePollInterval
+				}
+				_ = d.reschedule(msg.ID, time.Now().Add(wait), dec.Reason)
+				if wait > time.Minute {
+					wait = time.Minute
+				}
+				if !d.sleep(wait) {
+					return
+				}
+				continue
+			}
+			if dec.Wait > 0 {
+				if !d.sleep(dec.Wait) {
+					_ = d.reschedule(msg.ID, time.Now(), "shutdown during protect delay")
+					return
+				}
+			}
+		} else {
+			if delay := d.paceDelay(sessionID); delay > 0 {
+				if !d.sleep(delay) {
+					_ = d.reschedule(msg.ID, time.Now(), "shutdown during delay")
+					return
+				}
+			}
+			if err := limiter.wait(d.ctx); err != nil {
+				_ = d.reschedule(msg.ID, time.Now(), "shutdown during rate limit")
 				return
 			}
-		}
-
-		if err := limiter.wait(d.ctx); err != nil {
-			_ = d.reschedule(msg.ID, time.Now(), "shutdown during rate limit")
-			return
 		}
 
 		d.process(msg)
@@ -367,10 +418,18 @@ func (d *Dispatcher) sessionsWithWork() ([]string, error) {
 }
 
 func (d *Dispatcher) process(msg *domain.CampaignMessage) {
-	ok, skip, errMsg := d.attempt(msg.WhatsAppSessionID, msg.Phone, msg.MessageBody, msg.CampaignID)
+	body := msg.MessageBody
+	if d.guard != nil {
+		body = d.guard.RenderMessage(body)
+	}
+	ok, skip, errMsg := d.attempt(msg.WhatsAppSessionID, msg.Phone, body, msg.CampaignID)
 
 	dbCtx, cancel := context.WithTimeout(d.ctx, dbTimeout)
 	defer cancel()
+
+	if d.guard != nil && !skip {
+		d.guard.Record(dbCtx, msg.WhatsAppSessionID, ok, errMsg)
+	}
 
 	switch {
 	case ok:

@@ -3,13 +3,15 @@ import { render, screen, waitFor } from '@testing-library/react'
 import WhatsAppPanel from './page'
 
 function mockFetchOnceSessions(sessions: unknown[]) {
-  const fetchMock = jest.fn(() =>
-    Promise.resolve({
+  const fetchMock = jest.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    const payload = url.includes('/protect/') ? [] : sessions
+    return Promise.resolve({
       ok: true,
       status: 200,
-      json: () => Promise.resolve(sessions),
-    } as Response),
-  )
+      json: () => Promise.resolve(payload),
+    } as Response)
+  })
   global.fetch = fetchMock as unknown as typeof fetch
   return fetchMock
 }
@@ -22,14 +24,13 @@ describe('WhatsAppPanel', () => {
     jest.restoreAllMocks()
   })
 
-  it('renders 15 slots, all empty, when there are no sessions', async () => {
+  it('renders a compact connection action and the available capacity when there are no sessions', async () => {
     mockFetchOnceSessions([])
     const { unmount } = render(<WhatsAppPanel />)
 
     const slots = await screen.findAllByTestId('wa-slot')
-    expect(slots).toHaveLength(15)
-    // Every empty slot exposes the connect affordance.
-    expect(screen.getAllByText(/conectar novo número/i)).toHaveLength(15)
+    expect(slots).toHaveLength(1)
+    expect(screen.getByText(/conectar novo número/i)).toBeInTheDocument()
     expect(screen.getByText(/0 \/ 15 conectados/i)).toBeInTheDocument()
 
     unmount()
@@ -48,8 +49,8 @@ describe('WhatsAppPanel', () => {
 
     await waitFor(() => expect(screen.getByText(/99999-8888/)).toBeInTheDocument())
     expect(screen.getByText('Conectado')).toBeInTheDocument()
-    // 1 occupied + 14 empty = 15 slots.
-    expect(screen.getAllByTestId('wa-slot')).toHaveLength(15)
+    // One occupied card plus one compact connection action.
+    expect(screen.getAllByTestId('wa-slot')).toHaveLength(2)
     expect(screen.getByText(/1 \/ 15 conectados/i)).toBeInTheDocument()
 
     unmount()

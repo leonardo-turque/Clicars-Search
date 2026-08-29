@@ -26,4 +26,9 @@ postgres_data/
 Thumbs.db
 .idea/
 .vscode/
+backend;C/
 *.swp
+
+*.tsbuildinfo
+scripts/*.log
+

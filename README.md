@@ -60,7 +60,7 @@ graph LR
 │       ├── domain/             # Entidades: Search, Company, WhatsAppSession, Campaign
 │       ├── usecase/            # PerformSearch (regras de negócio)
 │       ├── repository/         # Google Maps scraper + PostgreSQL
-│       ├── campaign/           # Dispatch anti-ban (delay + rate limit)
+│       ├── campaign/           # Fila controlada (ritmo + limite por hora)
 │       ├── whatsapp/           # Cliente da API hospedada Zennitex
 │       └── delivery/http/      # Handlers: /api/v1/searches + /whatsapp + /campaigns
 └── frontend/                   # Dashboard Next.js
@@ -153,6 +153,9 @@ Crie `.env` na raiz (ou exporte as variáveis no shell). Veja `.env.example` par
 | `NEXT_PUBLIC_API_URL`       | `http://localhost:8080` | URL da API chamada pelo navegador — sobrescreva em produção    |
 | `WHATSAPP_API_URL`          | `https://whatsapp.zennitex.com.br/api` | Base da API WhatsApp Zennitex (inclui `/api`) |
 | `WHATSAPP_ADMIN_KEY`        | —                       | `API_SECRET_KEY` do painel WhatsApp (obrigatório p/ WA/campanhas) |
+| `PROTECT_DAILY_TARGET`      | `200`                   | Teto diário por número WhatsApp                                  |
+| `WARMUP_PRIMARY_PHONES`     | `554184376916`          | Números que entram no dia 1 da rampa de 21 dias                  |
+| `WARMUP_MATURE_PHONES`      | _(vazio)_               | Só chips que já completaram 21 dias reais                        |
 
 ---
 
@@ -294,6 +297,36 @@ Lista todos os números e o status ao vivo (`CONNECTED` / `CONNECTING` / `DISCON
 
 Remove a instância na API WhatsApp. `204 No Content` em caso de sucesso,
 `404 Not Found` se o `id` não existir.
+
+### `POST /api/v1/campaigns`
+
+Cria uma fila de mensagens para contatos que autorizaram o envio. O campo
+`consent_confirmed` é obrigatório; a API recusa a campanha com `422` quando a
+declaração não é enviada e guarda essa confirmação para auditoria.
+
+```json
+{
+  "search_id": "…",
+  "whatsapp_session_id": "…",
+  "message": "Olá! Responda SAIR para não receber novas mensagens.",
+  "consent_confirmed": true
+}
+```
+
+O ritmo e o teto por hora são controles de carga, não uma garantia contra
+restrições do provedor. Dados públicos de uma empresa não equivalem a opt-in.
+
+### Proteção anti-ban e aquecimento
+
+Cada número conectado passa pelo motor em `internal/protect`:
+
+- **Teto de 200/dia** espalhado na janela 08h–20h (America/Sao_Paulo), com pausa de almoço, jitter 90s–4min e descanso a cada 10 envios.
+- **Números novos** sobem em 4 fases ao longo de 21 dias (8 → 200). Dias 1–3 são só conversa com contatos de confiança.
+- **`554184376916`** (`WARMUP_PRIMARY_PHONES`) entra no **dia 1**, sem pular rampa.
+- Circuit breaker abre se o provedor devolver restrição, flood ou falhas repetidas.
+- Na aba **Proteção**, cadastre contatos de confiança para o aquecimento automático (pings curtos). Sem eles, o motor só controla o volume das campanhas.
+
+Nenhuma configuração garante que o WhatsApp não restrinja o número. Consentimento e relevância continuam obrigatórios.
 
 ---
 

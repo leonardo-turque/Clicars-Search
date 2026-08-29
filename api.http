@@ -66,3 +66,44 @@ GET {{host}}/api/v1/whatsapp/connect
 ### 9. Disconnect / remove a number -> expect 204 (404 if id unknown)
 # Replace <id> with an id returned by request #7.
 DELETE {{host}}/api/v1/whatsapp/sessions/<id>
+
+### 10. Create an authorized campaign -> expect 201 PENDING
+# Replace both UUIDs. consent_confirmed is mandatory and must reflect real opt-in.
+POST {{host}}/api/v1/campaigns
+Content-Type: application/json
+
+{
+  "search_id": "<search-id>",
+  "whatsapp_session_id": "<session-id>",
+  "message": "{{saudacao}}! Você autorizou novidades da nossa empresa. Responda SAIR para não receber novas mensagens.",
+  "consent_confirmed": true
+}
+
+### 11. Get campaign progress -> expect 200
+GET {{host}}/api/v1/campaigns/<id>
+
+### ---------------------------------------------------------------------------
+### Proteção anti-ban + aquecimento
+### ---------------------------------------------------------------------------
+
+### 12. Saúde dos números (cota diária, rampa, circuito)
+GET {{host}}/api/v1/protect/numbers
+
+### 13. Contatos de aquecimento
+GET {{host}}/api/v1/protect/contacts
+
+### 14. Adicionar contato de aquecimento
+POST {{host}}/api/v1/protect/contacts
+Content-Type: application/json
+
+{
+  "phone": "5541999990000",
+  "label": "Chip pessoal"
+}
+
+### 15. Pausar envios de um número
+POST {{host}}/api/v1/protect/numbers/<id>/pause
+
+### 16. Retomar envios
+POST {{host}}/api/v1/protect/numbers/<id>/resume
+

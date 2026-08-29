@@ -179,9 +179,9 @@ function RecentSearches({
   onStartCampaign: (s: SearchSummary) => void
 }) {
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-      <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
-        Buscas Recentes
+    <div className="surface p-4 sm:p-5">
+      <h2 className="text-xs font-bold text-gray-500 uppercase tracking-[0.14em] mb-3">
+        Histórico recente
       </h2>
       {loading ? (
         <div className="flex justify-center py-6"><Spinner /></div>
@@ -365,27 +365,27 @@ export default function Dashboard() {
   const hasManyResults = isCompleted && (activeDetail?.companies?.length ?? 0) > 0
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
+    <main className="min-h-screen">
+      <div className="page-shell">
 
         {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="h-8 w-8 rounded-lg bg-blue-600 flex items-center justify-center">
-              <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 0 5 11a6 6 0 0 0 12 0z" />
-              </svg>
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900">Clicars Search</h1>
+        <div className="page-heading">
+          <div>
+            <p className="eyebrow">Inteligência comercial</p>
+            <h1 className="page-title">Encontre as empresas certas.</h1>
+            <p className="page-lead">Pesquise por segmento e região, acompanhe a coleta em tempo real e organize os resultados em um só lugar.</p>
           </div>
-          <p className="text-gray-500 text-sm ml-11">Encontre empresas por nicho e localização</p>
+          <div className="hidden sm:flex items-center gap-2 rounded-2xl border border-blue-100 bg-blue-50/80 px-4 py-3 text-xs font-semibold text-blue-700">
+            <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+            Busca assistida ativa
+          </div>
         </div>
 
         {/* Layout: sidebar + main */}
-        <div className="flex flex-col lg:flex-row lg:gap-6 lg:items-start">
+        <div className="flex flex-col lg:flex-row lg:gap-7 lg:items-start">
 
           {/* Sidebar */}
-          <aside className="w-full lg:w-72 lg:flex-shrink-0 order-2 lg:order-1 mt-6 lg:mt-0">
+          <aside className="w-full lg:w-72 lg:flex-shrink-0 order-2 lg:order-1 mt-5 lg:mt-0">
             <RecentSearches
               searches={recentSearches}
               loading={loadingHistory}
@@ -399,16 +399,22 @@ export default function Dashboard() {
           <div className="flex-1 min-w-0 order-1 lg:order-2">
 
             {/* Search form */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
-              <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">Nova Busca</h2>
-              <form onSubmit={handleSearch} className="flex flex-col gap-4 md:flex-row md:items-end">
+            <div className="surface p-4 sm:p-6 mb-5">
+              <div className="flex items-center justify-between gap-3 mb-5">
+                <div>
+                  <p className="eyebrow">Nova pesquisa</p>
+                  <h2 className="text-lg font-semibold text-gray-900">Defina seu mercado</h2>
+                </div>
+                <span className="hidden sm:inline text-xs font-medium text-gray-400">Até 5.000 resultados</span>
+              </div>
+              <form onSubmit={handleSearch} className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_9rem_auto] xl:items-end">
                 <div className="flex-1 min-w-0">
                   <label htmlFor="niche" className="block text-sm font-medium text-gray-700 mb-1.5">Nicho</label>
                   <input
                     id="niche" type="text"
                     placeholder="Ex: Padarias, Oficinas, Clínicas..."
                     value={niche} onChange={(e) => setNiche(e.target.value)} required
-                    className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400 transition-colors text-sm"
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400 transition-colors text-sm"
                   />
                 </div>
 
@@ -418,11 +424,11 @@ export default function Dashboard() {
                     id="location" type="text"
                     placeholder="Ex: São Paulo, SP, Brasil"
                     value={location} onChange={(e) => setLocation(e.target.value)} required
-                    className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400 transition-colors text-sm"
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400 transition-colors text-sm"
                   />
                 </div>
 
-                <div className="w-full md:w-36 flex-shrink-0">
+                <div className="w-full">
                   <label htmlFor="quantity" className="block text-sm font-medium text-gray-700 mb-1.5">
                     Quantidade <span className="text-gray-400 font-normal">(máx 5000)</span>
                   </label>
@@ -430,14 +436,14 @@ export default function Dashboard() {
                     id="quantity" type="number"
                     min={1} max={5000}
                     value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} required
-                    className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 transition-colors text-sm"
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 transition-colors text-sm"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={submitting || isInProgress}
-                  className="w-full md:w-auto flex-shrink-0 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-blue-400 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors duration-150 flex items-center justify-center gap-2 text-sm whitespace-nowrap"
+                  className="w-full flex-shrink-0 px-6 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-blue-300 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors duration-150 flex items-center justify-center gap-2 text-sm whitespace-nowrap md:col-span-2 xl:col-span-1"
                 >
                   {submitting ? (
                     <><Spinner /> Iniciando…</>
@@ -475,7 +481,7 @@ export default function Dashboard() {
 
             {/* Results */}
             {isCompleted && activeDetail && (
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+              <div className="surface overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>
                     <h2 className="text-base font-semibold text-gray-900">
@@ -506,7 +512,7 @@ export default function Dashboard() {
                         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                         </svg>
-                        Iniciar Campanha
+                        Criar campanha
                       </button>
                     )}
                   </div>
@@ -517,7 +523,7 @@ export default function Dashboard() {
                     Nenhuma empresa encontrada para os critérios informados.
                   </p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <div className="desktop-table overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50">
                         <tr>
@@ -555,6 +561,32 @@ export default function Dashboard() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                )}
+
+                {activeDetail.companies.length > 0 && (
+                  <div className="mobile-card-list">
+                    {activeDetail.companies.map((company) => (
+                      <article key={`mobile-${company.id}`} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="truncate text-sm font-semibold text-gray-900">{company.name || 'Empresa sem nome'}</h3>
+                            <p className="mt-1 text-xs leading-relaxed text-gray-500">{company.location || 'Localização não informada'}</p>
+                          </div>
+                          <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-blue-700">Lead</span>
+                        </div>
+                        <div className="mt-4 grid gap-2 text-xs">
+                          <a href={company.phone ? `tel:${company.phone.replace(/\D/g, '')}` : undefined} className="font-medium text-gray-700">
+                            {company.phone || 'Telefone não informado'}
+                          </a>
+                          {company.website && (
+                            <a href={company.website} target="_blank" rel="noopener noreferrer" className="truncate font-semibold text-blue-600">
+                              {company.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                            </a>
+                          )}
+                        </div>
+                      </article>
+                    ))}
                   </div>
                 )}
               </div>

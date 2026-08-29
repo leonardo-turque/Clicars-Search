@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { API_URL, formatPhone } from '@/lib/format'
 
 type WAStatus = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED'
 
@@ -21,7 +22,13 @@ interface Campaign {
   progress: string
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+interface ProtectSnap {
+  session_id: string
+  remaining_today: number
+  daily_cap: number
+  stage: string
+}
+
 const POLL_MS = 2500
 const MAX_MESSAGE = 1000
 
@@ -34,18 +41,6 @@ function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
   )
 }
 
-// Best-effort BR phone formatting for the number picker.
-function formatPhone(raw: string): string {
-  if (!raw) return 'Número desconhecido'
-  const d = raw.replace(/\D/g, '')
-  if (d.length >= 12 && d.startsWith('55')) {
-    const ddd = d.slice(2, 4)
-    const rest = d.slice(4)
-    return `+55 (${ddd}) ${rest.slice(0, rest.length - 4)}-${rest.slice(-4)}`
-  }
-  return `+${d}`
-}
-
 export default function CampaignModal({
   searchId,
   searchLabel,
@@ -56,9 +51,11 @@ export default function CampaignModal({
   onClose: () => void
 }) {
   const [sessions, setSessions] = useState<WhatsAppSession[]>([])
+  const [health, setHealth] = useState<ProtectSnap[]>([])
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [selectedSessionId, setSelectedSessionId] = useState('')
   const [message, setMessage] = useState('')
+  const [consentConfirmed, setConsentConfirmed] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [campaign, setCampaign] = useState<Campaign | null>(null)
@@ -77,6 +74,11 @@ export default function CampaignModal({
         const connected = (data ?? []).filter((s) => s.status === 'CONNECTED')
         setSessions(connected)
         if (connected.length > 0) setSelectedSessionId(connected[0].id)
+        const hRes = await fetch(`${API_URL}/api/v1/protect/numbers`)
+        if (hRes.ok && active) {
+          const hData: ProtectSnap[] = await hRes.json()
+          setHealth(hData ?? [])
+        }
       } catch {
         if (active) setError('Não foi possível carregar os números de WhatsApp conectados.')
       } finally {
@@ -119,6 +121,7 @@ export default function CampaignModal({
             search_id: searchId,
             whatsapp_session_id: selectedSessionId,
             message,
+            consent_confirmed: consentConfirmed,
           }),
         })
         const body = await res.json().catch(() => null)
@@ -136,12 +139,13 @@ export default function CampaignModal({
         setSubmitting(false)
       }
     },
-    [searchId, selectedSessionId, message],
+    [searchId, selectedSessionId, message, consentConfirmed],
   )
 
   const noNumbers = !loadingSessions && sessions.length === 0
   const attempted = campaign ? campaign.sent + campaign.failed : 0
   const pct = campaign && campaign.total > 0 ? Math.round((attempted / campaign.total) * 100) : 0
+  const selectedHealth = health.find((h) => h.session_id === selectedSessionId)
 
   return (
     <div
@@ -150,16 +154,17 @@ export default function CampaignModal({
       aria-modal="true"
       onClick={onClose}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 relative" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-panel bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 sm:p-6 relative" onClick={(e) => e.stopPropagation()}>
         <button onClick={onClose} aria-label="Fechar" className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
 
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">Iniciar Campanha</h2>
+        <p className="eyebrow">Envio responsável</p>
+        <h2 className="text-xl font-semibold text-gray-900 mb-1">Nova campanha</h2>
         <p className="text-sm text-gray-500 mb-5">
-          {searchLabel ? <>Disparo para os leads de <strong>{searchLabel}</strong>.</> : 'Disparo para os leads desta busca.'}
+          {searchLabel ? <>Envio para os contatos autorizados de <strong>{searchLabel}</strong>.</> : 'Envio para os contatos autorizados desta busca.'}
         </p>
 
         {/* --- Running / progress view --- */}
@@ -168,7 +173,7 @@ export default function CampaignModal({
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-sm font-medium text-gray-700">
-                  {campaign.status === 'COMPLETED' ? 'Disparo concluído' : 'Disparando…'}
+                  {campaign.status === 'COMPLETED' ? 'Campanha concluída' : 'Envio em andamento…'}
                 </span>
                 <span className="text-sm text-gray-500" data-testid="campaign-progress">
                   {campaign.progress}
@@ -200,7 +205,7 @@ export default function CampaignModal({
             {campaign.status !== 'COMPLETED' ? (
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <Spinner />
-                O envio acontece em segundo plano (intervalo anti-ban de 30–90s). Você pode fechar esta janela.
+                A fila é processada em segundo plano com limites operacionais. Você pode fechar esta janela.
               </div>
             ) : (
               <div className="rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm px-4 py-3">
@@ -244,8 +249,15 @@ export default function CampaignModal({
                       {formatPhone(s.phone_number)}
                     </option>
                   ))}
-                </select>
-              )}
+                  </select>
+                )}
+                {selectedHealth && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    Cota de hoje: {selectedHealth.remaining_today} de {selectedHealth.daily_cap} restantes
+                    {selectedHealth.stage === 'WARMING' ? ' · número ainda em aquecimento' : ''}.
+                    A fila respeita o teto e continua no dia seguinte.
+                  </p>
+                )}
             </div>
 
             {/* Message */}
@@ -257,47 +269,51 @@ export default function CampaignModal({
                 id="wa-message"
                 rows={4}
                 maxLength={MAX_MESSAGE}
-                placeholder="Olá! Temos uma oferta especial para a sua empresa…"
+                placeholder={'{{saudacao}}! Temos uma oferta especial para a sua empresa. Responda SAIR para sair.'}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-400 text-sm resize-none"
               />
               <p className="text-xs text-gray-400 mt-1 text-right">{message.length}/{MAX_MESSAGE}</p>
+              <p className="mt-1 text-xs text-gray-500">Use <code className="rounded bg-gray-100 px-1">{'{{saudacao}}'}</code> para Bom dia / Boa tarde / Boa noite conforme o horário.</p>
             </div>
 
-            {/* Anti-ban notice */}
-            <div className="flex items-start gap-2.5 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
-              <svg className="h-5 w-5 text-amber-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  fillRule="evenodd"
-                  d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              <p className="text-xs text-amber-800 leading-relaxed">
-                <strong>Disparo inteligente (anti-ban):</strong> as mensagens são enviadas com intervalo aleatório de
-                30 a 90 segundos, com limite por hora por número e validação de cada destino no WhatsApp. O envio
-                continua em segundo plano mesmo se você fechar esta janela.
+            <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={consentConfirmed}
+                onChange={(e) => setConsentConfirmed(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-xs leading-relaxed text-gray-700">
+                Confirmo que estes contatos autorizaram mensagens desta empresa e que poderão solicitar a saída da lista.
+              </span>
+            </label>
+
+            <div className="notice-safe flex items-start gap-2.5 rounded-xl px-4 py-3">
+              <span aria-hidden="true" className="mt-0.5 font-bold">✓</span>
+              <p className="text-xs leading-relaxed">
+                <strong>Fila controlada:</strong> limites reduzem sobrecarga, mas não garantem entrega nem impedem restrições do provedor. Consentimento e relevância continuam obrigatórios.
               </p>
             </div>
 
             {error && <p className="text-sm text-red-600">{error}</p>}
 
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-5 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium transition-colors"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium transition-colors"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                disabled={submitting || noNumbers || !selectedSessionId || message.trim() === ''}
-                className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
+                disabled={submitting || noNumbers || !selectedSessionId || message.trim() === '' || !consentConfirmed}
+                className="w-full sm:w-auto justify-center inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
               >
                 {submitting && <Spinner />}
-                Iniciar Disparo
+                Criar campanha
               </button>
             </div>
           </form>
